@@ -2,6 +2,7 @@
 
 import { defaultMap } from '@/sim/map/defaultMap';
 import { lastMissionDurations } from '@/sim/metrics/phaseDurations';
+import type { RouteConflict } from '@/sim/pathfinding/conflicts';
 import type { FlightPhase } from '@/sim/types';
 import { msToKmh } from '@/sim/util/units';
 import { type DroneView, useSimStore } from '@/store/simStore';
@@ -21,6 +22,73 @@ function Stat({ label, value, unit }: { label: string; value: string; unit?: str
         {unit && <span className="ml-0.5 text-[10px] text-slate-500">{unit}</span>}
       </div>
     </div>
+  );
+}
+
+interface RouteSummary {
+  lengthM: number;
+  straightM: number;
+  estCruiseSec: number;
+  expandedNodes: number;
+  computeMs: number;
+  waypoints?: number;
+}
+
+function RouteBox({ title, route, conflicts }: { title: string; route: RouteSummary; conflicts: RouteConflict[] }) {
+  const detour = route.straightM > 0 ? (route.lengthM / route.straightM - 1) * 100 : 0;
+  return (
+    <div className="rounded border border-slate-200 px-2 py-1.5 text-xs">
+      <div className="mb-1 flex items-center justify-between">
+        <span className="font-semibold text-slate-600">{title}</span>
+        {conflicts.length === 0 ? (
+          <span className="text-emerald-600">✓ 장애물 침범 없음</span>
+        ) : (
+          <span className="text-red-600">⚠ 침범 {conflicts.length}곳</span>
+        )}
+      </div>
+      <div className="grid grid-cols-2 gap-x-3 gap-y-0.5 text-slate-700">
+        <span>순항 거리</span>
+        <span className="text-right font-mono tabular-nums">
+          {route.lengthM.toFixed(0)}m <span className="text-slate-400">(직선 +{detour.toFixed(1)}%)</span>
+        </span>
+        <span>최소 순항 시간</span>
+        <span className="text-right font-mono tabular-nums">{route.estCruiseSec.toFixed(1)}s</span>
+        <span>A* 탐색</span>
+        <span className="text-right font-mono tabular-nums">
+          {route.expandedNodes === 0 ? '직선 (생략)' : `${route.expandedNodes.toLocaleString()}노드`} · {route.computeMs.toFixed(0)}ms
+        </span>
+      </div>
+      {conflicts.length > 0 && (
+        <div className="mt-1 text-red-600">
+          {conflicts.map((c) => (c.kind === 'ALTITUDE' ? '고도 제한' : (c.name ?? c.id))).join(', ')}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** 대기 중일 때 선택한 출발·도착의 경로 미리보기 */
+function PreviewBox() {
+  const preview = useSimStore((s) => s.preview);
+  if (!preview) return null;
+  const r = preview.result;
+  if (!r.ok) {
+    return <div className="rounded border border-red-200 bg-red-50 px-2 py-1 text-xs text-red-700">경로 없음: {r.reason}</div>;
+  }
+  const a = r.path[0];
+  const b = r.path[r.path.length - 1];
+  return (
+    <RouteBox
+      title="출발 전 경로 미리보기"
+      route={{
+        lengthM: r.lengthM,
+        straightM: Math.hypot(b.x - a.x, b.y - a.y),
+        estCruiseSec: r.estFlightSec,
+        expandedNodes: r.expanded,
+        computeMs: r.computeMs,
+      }}
+      conflicts={routeConflicts(preview.fullPath)}
+    />
   );
 }
 
@@ -71,12 +139,7 @@ function DroneCard({ d }: { d: DroneView }) {
         </div>
       </div>
 
-      {conflicts.length > 0 && (
-        <div className="rounded border border-red-200 bg-red-50 px-2 py-1 text-xs text-red-700">
-          ⚠ 직선 경로가 {conflicts.map((c) => (c.kind === 'ALTITUDE' ? '고도 제한' : (c.name ?? c.id))).join(', ')}을(를) 침범합니다.
-          <span className="text-red-500"> (M3 경로 탐색에서 우회)</span>
-        </div>
-      )}
+      {d.route ? <RouteBox title="현재 비행 경로 (A*)" route={d.route} conflicts={conflicts} /> : d.phase === 'IDLE' && <PreviewBox />}
 
       {mission && (
         <div>

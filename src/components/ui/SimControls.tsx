@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect } from 'react';
 import { defaultConfig } from '@/sim/config';
 import { defaultMap } from '@/sim/map/defaultMap';
 import { useSimStore } from '@/store/simStore';
@@ -19,9 +19,12 @@ const btn = 'rounded-md px-2.5 py-1.5 text-sm font-medium transition disabled:cu
 
 /** 하단 컨트롤 바: 재생/일시정지, 배속, 초기화, 시험 비행 */
 export function SimControls() {
-  const { paused, speed, time, drones, message, togglePause, setSpeed, reset, flyMission } = useSimStore();
-  const [dockId, setDockId] = useState(defaultMap.docks[0].id);
-  const [stationId, setStationId] = useState(defaultMap.stations[0].id);
+  const { paused, speed, time, drones, message, selection, select, togglePause, setSpeed, reset, flyMission } = useSimStore();
+  const { dockId, stationId } = selection;
+  // 처음 열 때 기본 선택의 경로 미리보기를 계산한다
+  useEffect(() => {
+    if (!useSimStore.getState().preview) select({});
+  }, [select]);
   const idle = drones.some((d) => d.phase === 'IDLE');
 
   return (
@@ -53,7 +56,7 @@ export function SimControls() {
         출발
         <select
           value={dockId}
-          onChange={(e) => setDockId(e.target.value)}
+          onChange={(e) => select({ dockId: e.target.value })}
           className="rounded border border-slate-200 bg-white px-1.5 py-1 text-sm text-slate-800"
         >
           {defaultMap.docks.map((d) => (
@@ -68,7 +71,7 @@ export function SimControls() {
         도착
         <select
           value={stationId}
-          onChange={(e) => setStationId(e.target.value)}
+          onChange={(e) => select({ stationId: e.target.value })}
           className="rounded border border-slate-200 bg-white px-1.5 py-1 text-sm text-slate-800"
         >
           {defaultMap.stations.map((s) => (
@@ -79,7 +82,7 @@ export function SimControls() {
         </select>
       </label>
       <button
-        onClick={() => flyMission(dockId, stationId)}
+        onClick={flyMission}
         disabled={!idle}
         className={`${btn} bg-sky-600 text-white hover:bg-sky-500`}
         title={idle ? '대기 중인 드론으로 시험 비행' : '대기 중인 드론이 없습니다'}

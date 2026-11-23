@@ -8,12 +8,38 @@ import { defaultConfig } from '@/sim/config';
 import { LocalSimEngine } from '@/sim/engine/LocalSimEngine';
 import type { PhaseChange, SimEngine } from '@/sim/engine/SimEngine';
 import { SimRunner } from '@/sim/engine/SimRunner';
+import { buildTripLegs, flattenLegs } from '@/sim/flight/route';
 import { defaultMap } from '@/sim/map/defaultMap';
-import type { FlightPhase, Vec3 } from '@/sim/types';
+import { type PlanResult, PathPlanner } from '@/sim/pathfinding/planner';
+import type { FlightPhase, RouteInfo, Vec3 } from '@/sim/types';
 
 export const engine: SimEngine = new LocalSimEngine();
 engine.load(defaultMap, defaultConfig, 1);
 export const runner = new SimRunner(engine, defaultConfig.time);
+
+/** 출발 전 경로 미리보기용 계획기 (엔진과 별도 인스턴스, 처음 쓸 때 만든다) */
+let previewPlanner: PathPlanner | null = null;
+
+export interface RoutePreview {
+  dockId: string;
+  stationId: string;
+  result: PlanResult;
+  /** 이륙·순항·하강을 포함한 전체 경로 (성공 시) */
+  fullPath: Vec3[];
+}
+
+function computePreview(dockId: string, stationId: string): RoutePreview | null {
+  const dock = defaultMap.docks.find((d) => d.id === dockId);
+  const station = defaultMap.stations.find((s) => s.id === stationId);
+  if (!dock || !station) return null;
+  previewPlanner ??= new PathPlanner(defaultMap, defaultConfig);
+  const z = defaultConfig.altitude.cruiseM;
+  const result = previewPlanner.plan({ ...dock.position, z }, { ...station.position, z });
+  const fullPath = result.ok
+    ? flattenLegs(buildTripLegs(dock.position, station.position, z, result.path.slice(1, -1))).path
+    : [];
+  return { dockId, stationId, result, fullPath };
+}
 
 export interface DroneView {
   id: string;
@@ -26,6 +52,7 @@ export interface DroneView {
   /** 엔진의 경로 배열 참조 (비행마다 새 배열이 된다) */
   path: readonly Vec3[];
   pathIndex: number;
+  route: RouteInfo | null;
 }
 
 interface SimUiState {
@@ -35,10 +62,13 @@ interface SimUiState {
   drones: DroneView[];
   phaseLog: readonly PhaseChange[];
   message: { text: string; ok: boolean } | null;
+  selection: { dockId: string; stationId: string };
+  preview: RoutePreview | null;
+  select: (sel: Partial<{ dockId: string; stationId: string }>) => void;
   setSpeed: (s: number) => void;
   togglePause: () => void;
   reset: () => void;
-  flyMission: (fromDockId: string, toStationId: string) => void;
+  flyMission: () => void;
   publish: () => void;
 }
 
@@ -53,6 +83,7 @@ function readDrones(): DroneView[] {
     homeDockId: d.homeDockId,
     path: d.path,
     pathIndex: d.pathIndex,
+    route: d.route,
   }));
 }
 
@@ -63,7 +94,13 @@ export const useSimStore = create<SimUiState>((set, get) => ({
   drones: readDrones(),
   phaseLog: [],
   message: null,
+  selection: { dockId: defaultMap.docks[0].id, stationId: defaultMap.stations[0].id },
+  preview: null,
 
+  select: (sel) => {
+    const selection = { ...get().selection, ...sel };
+    set({ selection, preview: computePreview(selection.dockId, selection.stationId), message: null });
+  },
   setSpeed: (speed) => {
     runner.speed = speed;
     set({ speed });
@@ -77,8 +114,9 @@ export const useSimStore = create<SimUiState>((set, get) => ({
     set({ message: null });
     get().publish();
   },
-  flyMission: (fromDockId, toStationId) => {
-    const r = engine.dispatch({ type: 'FLY_MISSION', fromDockId, toStationId });
+  flyMission: () => {
+    const { dockId, stationId } = get().selection;
+    const r = engine.dispatch({ type: 'FLY_MISSION', fromDockId: dockId, toStationId: stationId });
     set({ message: r.ok ? { text: '출발했습니다', ok: true } : { text: r.reason, ok: false } });
     get().publish();
   },

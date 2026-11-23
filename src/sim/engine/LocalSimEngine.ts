@@ -8,11 +8,13 @@ import type { SimConfig } from '../config';
 import { drainBattery } from '../flight/battery';
 import { type MotionLimits, limitsFromConfig, stepAlongPath } from '../flight/kinematics';
 import { type Leg, buildTripLegs, flattenLegs } from '../flight/route';
+import { PathPlanner } from '../pathfinding/planner';
 import type { Dock, Drone, FlightPhase, MapData, Order, Station, Vec3, WindState } from '../types';
 import { clone } from '../util/vec3';
 import type { DispatchResult, PhaseChange, SimCommand, SimEngine, SimEvent, SimSnapshot } from './SimEngine';
 
 const PHASE_LOG_LIMIT = 500;
+const RETURN_RETRY_SEC = 10;
 
 interface Trip {
   kind: 'OUTBOUND' | 'RETURN';
@@ -39,6 +41,8 @@ export class LocalSimEngine implements SimEngine {
   private config!: SimConfig;
   private seed = 0;
   private limits!: MotionLimits;
+  private planner!: PathPlanner;
+  private plannerKey: { map: MapData; config: SimConfig } | null = null;
   private time = 0;
   private runtimes: DroneRuntime[] = [];
   private byId = new Map<string, DroneRuntime>();
@@ -56,6 +60,11 @@ export class LocalSimEngine implements SimEngine {
     this.config = config;
     this.seed = seed;
     this.limits = limitsFromConfig(config);
+    // 격자 생성이 비싸므로 같은 지도·설정이면 재사용한다 (reset 포함)
+    if (!this.plannerKey || this.plannerKey.map !== map || this.plannerKey.config !== config) {
+      this.planner = new PathPlanner(map, config);
+      this.plannerKey = { map, config };
+    }
     this.docks = new Map(map.docks.map((d) => [d.id, d]));
     this.stations = new Map(map.stations.map((s) => [s.id, s]));
     this.time = 0;
@@ -79,6 +88,7 @@ export class LocalSimEngine implements SimEngine {
         orderId: null,
         path: [],
         pathIndex: 0,
+        route: null,
       };
       this.runtimes.push({ drone, trip: null, legIndex: 0, wpIndex: 1, dwellUntil: 0, stationId: null });
     }
@@ -149,19 +159,49 @@ export class LocalSimEngine implements SimEngine {
       return { ok: false, reason: `탑재 중량 ${payload}kg 이 최대 ${this.config.drone.maxPayloadKg}kg 을 넘습니다` };
     }
 
+    // 복귀 경로도 있는지 먼저 확인한다 (가서 못 돌아오는 일이 없게)
+    const back = this.planCruise(station.position, dock.position);
+    if (!back.ok) return { ok: false, reason: `복귀 경로 없음: ${back.reason}` };
+    const out = this.planCruise(dock.position, station.position);
+    if (!out.ok) return { ok: false, reason: `경로 없음: ${out.reason}` };
+
     // 대기 중인 드론은 다른 도크로 옮겨 배치할 수 있다 (시험 비행용)
     if (rt.drone.homeDockId !== dock.id) {
       rt.drone.homeDockId = dock.id;
       rt.drone.position = clone(dock.position);
     }
     rt.drone.payloadKg = payload;
-    this.startTrip(rt, 'OUTBOUND', dock.position, station.position, station.id);
+    this.startTrip(rt, 'OUTBOUND', dock.position, station.position, station.id, out);
     this.setPhase(rt, 'TAKEOFF');
     return { ok: true };
   }
 
-  private startTrip(rt: DroneRuntime, kind: Trip['kind'], from: Vec3, to: Vec3, stationId: string) {
-    const legs = buildTripLegs(from, to, this.config.altitude.cruiseM);
+  /** 순항 고도에서 출발 패드 상공 → 도착 패드 상공 경로를 탐색한다 */
+  private planCruise(from: Vec3, to: Vec3) {
+    const z = this.config.altitude.cruiseM;
+    return this.planner.plan({ x: from.x, y: from.y, z }, { x: to.x, y: to.y, z });
+  }
+
+  private startTrip(
+    rt: DroneRuntime,
+    kind: Trip['kind'],
+    from: Vec3,
+    to: Vec3,
+    stationId: string,
+    plan: Extract<ReturnType<PathPlanner['plan']>, { ok: true }>,
+  ) {
+    // 계획 경로의 양 끝(패드 상공)은 buildTripLegs 가 붙이므로 중간점만 넘긴다
+    const legs = buildTripLegs(from, to, this.config.altitude.cruiseM, plan.path.slice(1, -1));
+    const a = plan.path[0];
+    const b = plan.path[plan.path.length - 1];
+    rt.drone.route = {
+      rawPath: plan.rawPath,
+      lengthM: plan.lengthM,
+      straightM: Math.hypot(b.x - a.x, b.y - a.y),
+      estCruiseSec: plan.estFlightSec,
+      expandedNodes: plan.expanded,
+      computeMs: plan.computeMs,
+    };
     const { path, offsets } = flattenLegs(legs);
     rt.trip = { kind, legs, offsets, stationId };
     rt.legIndex = 0;
@@ -174,7 +214,13 @@ export class LocalSimEngine implements SimEngine {
     const station = rt.stationId ? this.stations.get(rt.stationId) : undefined;
     const dock = this.docks.get(rt.drone.homeDockId);
     if (!station || !dock) return;
-    this.startTrip(rt, 'RETURN', station.position, dock.position, station.id);
+    const plan = this.planCruise(station.position, dock.position);
+    if (!plan.ok) {
+      // 출발 전에 확인했으므로 보통 일어나지 않는다. 잠시 후 다시 시도
+      rt.dwellUntil = this.time + RETURN_RETRY_SEC;
+      return;
+    }
+    this.startTrip(rt, 'RETURN', station.position, dock.position, station.id, plan);
     this.setPhase(rt, 'RETURN');
   }
 
@@ -197,6 +243,7 @@ export class LocalSimEngine implements SimEngine {
     rt.trip = null;
     rt.drone.path = [];
     rt.drone.pathIndex = 0;
+    rt.drone.route = null;
     if (trip.kind === 'OUTBOUND') {
       rt.stationId = trip.stationId;
       rt.drone.payloadKg = 0;

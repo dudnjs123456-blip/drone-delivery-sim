@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { type SimConfig, defaultConfig } from '../config';
 import { defaultMap } from '../map/defaultMap';
 import { lastMissionDurations } from '../metrics/phaseDurations';
+import { findRouteConflicts } from '../pathfinding/conflicts';
 import type { FlightPhase } from '../types';
 import { kmhToMs } from '../util/units';
 import { LocalSimEngine } from './LocalSimEngine';
@@ -89,6 +90,29 @@ describe('LocalSimEngine', () => {
     expect(m.phases.LANDED).toBeCloseTo(defaultConfig.drone.stationDwellSec, 1);
     expect(m.outboundSec).toBeGreaterThan(m.phases.CRUISE!);
     expect(m.totalSec).toBeGreaterThan(m.outboundSec! + defaultConfig.drone.stationDwellSec);
+  });
+
+  it('A* 경로: 직선으로는 건물·비행금지구역을 지나는 구간도 침범 없이 왕복한다', () => {
+    for (const [dockId, stationId] of [
+      ['dock-a', 'station-n'], // 직선은 비행금지구역 통과
+      ['dock-a', 'station-s'], // 직선은 106동 충돌
+    ] as const) {
+      const e = makeEngine();
+      expect(e.dispatch({ type: 'FLY_MISSION', fromDockId: dockId, toStationId: stationId }).ok).toBe(true);
+      const d = e.getSnapshot().drones[0];
+      const flown: { x: number; y: number; z: number }[] = [{ ...d.position }];
+      const plannedPaths = new Set<readonly unknown[]>();
+      for (let i = 0; i < 20000; i++) {
+        e.step(DT);
+        if (d.path.length) plannedPaths.add(d.path);
+        if (i % 4 === 0) flown.push({ ...d.position });
+        if (d.phase === 'IDLE') break;
+      }
+      expect(d.phase).toBe('IDLE');
+      expect(plannedPaths.size).toBe(2); // 편도 + 복귀
+      // 계획 경로뿐 아니라 실제로 날아간 궤적도 장애물을 침범하지 않는다
+      expect(findRouteConflicts(defaultMap, flown, defaultConfig.altitude.maxM)).toEqual([]);
+    }
   });
 
   it('비행 중인 드론에 다시 임무를 줄 수 없고, 과적을 거부한다', () => {

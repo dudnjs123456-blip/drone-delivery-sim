@@ -19,7 +19,7 @@ export function MapLegend({ map }: { map: MapData }) {
   return (
     <div className="w-64 rounded-lg bg-white/90 p-3 text-sm shadow-lg backdrop-blur">
       <h1 className="text-base font-bold text-slate-900">드론 배송 시뮬레이터</h1>
-      <p className="mb-2 text-xs text-slate-500">{map.name} · M2 드론 1대 비행</p>
+      <p className="mb-2 text-xs text-slate-500">{map.name} · M3 3D 경로 탐색</p>
       <ul className="space-y-1">
         {items.map((it) => (
           <li key={it.label} className="flex items-center gap-2 text-slate-700">
@@ -30,6 +30,9 @@ export function MapLegend({ map }: { map: MapData }) {
       </ul>
       <p className="mt-2 border-t border-slate-200 pt-2 text-[11px] leading-relaxed text-slate-500">
         순항 고도 {defaultConfig.altitude.cruiseM}m · 고도 제한 {defaultConfig.altitude.maxM}m
+        <br />
+        경로: <span className="text-orange-500">주황 점선</span> 미리보기 · <span className="text-sky-600">파랑</span> 비행 중 ·{' '}
+        <span className="text-purple-500">보라</span> A* 격자
         <br />
         드래그: 회전 · 우클릭 드래그: 이동 · 휠: 확대
       </p>

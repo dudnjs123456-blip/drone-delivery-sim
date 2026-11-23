@@ -100,9 +100,24 @@ export interface Drone {
   payloadKg: number;
   homeDockId: string;
   orderId: string | null;
-  /** 경로 탐색 결과 웨이포인트 */
+  /** 현재 비행의 전체 웨이포인트 (이륙·순항·하강 포함) */
   path: Vec3[];
   pathIndex: number;
+  /** 현재 비행의 순항 구간 경로 탐색 정보 */
+  route: RouteInfo | null;
+}
+
+export interface RouteInfo {
+  /** A* 격자 경로 (평활화 전, 시각화·디버그용) */
+  rawPath: Vec3[];
+  /** 순항 구간 길이 (m) */
+  lengthM: number;
+  /** 같은 고도 직선 거리 (m) */
+  straightM: number;
+  /** 운동 제한만 고려한 최소 순항 시간 (s) */
+  estCruiseSec: number;
+  expandedNodes: number;
+  computeMs: number;
 }
 
 // ── 주문 ──

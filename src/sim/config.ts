@@ -46,6 +46,22 @@ export interface SimConfig {
     /** 드론 간 최소 이격 거리 (m) */
     minSeparationM: number;
   };
+  pathfinding: {
+    /** 격자 수평 크기 (m) */
+    cellSizeM: number;
+    /** 격자 고도층 간격 (m). 순항 고도가 층 위에 오도록 맞춘다 */
+    layerHeightM: number;
+    /** 경로 탐색에 쓰는 최저 고도 (m) */
+    minAltitudeM: number;
+    /** 건물 옆면과의 최소 수평 거리 (m) */
+    buildingClearanceM: number;
+    /** 건물 옥상 위 최소 수직 거리 (m) */
+    verticalClearanceM: number;
+    /** 비행금지구역 경계 바깥 여유 (m) */
+    noFlyMarginM: number;
+    /** 직선 가시성 검사 샘플 간격 (m) */
+    losSampleM: number;
+  };
   fleet: {
     /** 운용 드론 수. 도크에 순서대로 나눠 배치한다 */
     droneCount: number;
@@ -83,6 +99,15 @@ export const defaultConfig: SimConfig = {
   },
   traffic: {
     minSeparationM: 15,
+  },
+  pathfinding: {
+    cellSizeM: 5,
+    layerHeightM: 10,
+    minAltitudeM: 30,
+    buildingClearanceM: 10,
+    verticalClearanceM: 10,
+    noFlyMarginM: 5,
+    losSampleM: 1,
   },
   fleet: {
     droneCount: 1,
