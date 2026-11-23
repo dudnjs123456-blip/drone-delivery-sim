@@ -1,0 +1,159 @@
+/**
+ * 핵심 도메인 타입.
+ * 좌표계: ENU (x = 동, y = 북, z = 위), 단위 m. 시각은 시뮬레이션 시작 후 경과 초.
+ * 이 파일은 렌더링 라이브러리에 의존하지 않는다.
+ */
+
+// ── 공통 ──
+export interface Vec3 {
+  x: number;
+  y: number;
+  z: number;
+}
+export type Vec2Tuple = [number, number];
+
+// ── 지도 (src/data/map.json) ──
+export interface MapData {
+  version: 1;
+  name?: string;
+  /** ENU 원점의 위경도. 브이월드 등 실제 데이터로 교체할 때 변환 기준점 */
+  origin: { lat: number; lon: number };
+  bounds: { minX: number; minY: number; maxX: number; maxY: number };
+  buildings: Building[];
+  stores: Store[];
+  docks: Dock[];
+  stations: Station[];
+  noFlyZones: NoFlyZone[];
+}
+
+export type BuildingKind = 'APARTMENT' | 'COMMERCIAL';
+
+export interface Building {
+  id: string;
+  kind: BuildingKind;
+  name?: string;
+  /** 바닥 다각형 (x, y). 반시계 방향. 로더가 시계 방향 입력을 정규화한다 */
+  footprint: Vec2Tuple[];
+  /** 지면(z=0)부터 옥상까지 높이 */
+  heightM: number;
+}
+
+/** 음식이 출발하는 가게 */
+export interface Store {
+  id: string;
+  name?: string;
+  buildingId: string;
+  position: Vec3;
+  /** 음식을 싣는 도크 */
+  dockId: string;
+  /** 가게 → 도크 도보 이동 시간 (s) */
+  walkToDockSec: number;
+}
+
+/** 상가 옥상 이륙 도크 */
+export interface Dock {
+  id: string;
+  name?: string;
+  buildingId: string;
+  /** 패드 중심. z 는 옥상 높이와 같아야 한다 */
+  position: Vec3;
+  pads: number;
+}
+
+/** 단지 내 착륙 스테이션 */
+export interface Station {
+  id: string;
+  name?: string;
+  position: Vec3;
+  pads: number;
+  /** 문 앞까지 배달하는 단지 배송원 수 */
+  couriers: number;
+  servesBuildingIds: string[];
+}
+
+/** 원기둥 형태의 비행금지구역 */
+export interface NoFlyZone {
+  id: string;
+  name?: string;
+  center: { x: number; y: number };
+  radiusM: number;
+  minZ: number;
+  maxZ: number;
+}
+
+// ── 드론 ──
+/**
+ * RETURN: 스테이션 이륙부터 도크 착륙까지의 복귀 비행 전체.
+ * 내부적으로 상승·순항·하강 로직을 재사용한다.
+ */
+export type FlightPhase = 'IDLE' | 'TAKEOFF' | 'CRUISE' | 'DESCEND' | 'LANDED' | 'RETURN';
+
+export interface Drone {
+  id: string;
+  phase: FlightPhase;
+  position: Vec3;
+  /** m/s */
+  velocity: Vec3;
+  headingRad: number;
+  /** 남은 배터리 비율 0~1 */
+  battery: number;
+  payloadKg: number;
+  homeDockId: string;
+  orderId: string | null;
+  /** 경로 탐색 결과 웨이포인트 */
+  path: Vec3[];
+  pathIndex: number;
+}
+
+// ── 주문 ──
+export type OrderStatus =
+  | 'COOKING'
+  | 'TO_DOCK'
+  | 'WAITING_DRONE'
+  | 'IN_FLIGHT'
+  | 'AT_STATION'
+  | 'LAST_MILE'
+  | 'DELIVERED'
+  /** 바람 기준 초과로 라이더에게 넘어간 주문 */
+  | 'RIDER_ASSIGNED';
+
+export type DeliveryMode = 'DRONE' | 'RIDER';
+
+export interface Order {
+  id: string;
+  storeId: string;
+  stationId: string;
+  destBuildingId: string;
+  weightKg: number;
+  mode: DeliveryMode;
+  status: OrderStatus;
+  droneId: string | null;
+  /** 각 시점의 시뮬레이션 시각(s). 구간 시간은 이 값들의 차이로 계산한다 */
+  t: {
+    created: number;
+    cookDone?: number;
+    atDock?: number;
+    takeoff?: number;
+    landed?: number;
+    courierPickup?: number;
+    delivered?: number;
+  };
+}
+
+// ── 바람 ──
+export interface WindState {
+  /** 기상 관례: 바람이 "불어오는" 방향 (rad, 북=0, 시계 방향) */
+  fromDirRad: number;
+  /** 평균 풍속 m/s */
+  meanSpeed: number;
+  /** 현재 돌풍 풍속 m/s (없으면 0) */
+  gustSpeed: number;
+}
+
+export interface WindField {
+  state(t: number): WindState;
+  /** 해당 위치의 바람 벡터 (빌딩풍 증폭 포함), m/s */
+  sample(pos: Vec3, t: number): Vec3;
+  /** 운항 가능 여부 (평균·돌풍 기준 미만) */
+  isFlyable(t: number): boolean;
+}

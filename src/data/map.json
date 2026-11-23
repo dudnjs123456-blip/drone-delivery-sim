@@ -1,0 +1,528 @@
+{
+  "version": 1,
+  "name": "가상 아파트 단지 (M1)",
+  "origin": {
+    "lat": 37.5,
+    "lon": 127
+  },
+  "bounds": {
+    "minX": -320,
+    "minY": -280,
+    "maxX": 300,
+    "maxY": 260
+  },
+  "buildings": [
+    {
+      "id": "apt-101",
+      "kind": "APARTMENT",
+      "name": "101동",
+      "footprint": [
+        [
+          -100,
+          152
+        ],
+        [
+          -60,
+          152
+        ],
+        [
+          -60,
+          168
+        ],
+        [
+          -100,
+          168
+        ]
+      ],
+      "heightM": 60
+    },
+    {
+      "id": "apt-102",
+      "kind": "APARTMENT",
+      "name": "102동",
+      "footprint": [
+        [
+          0,
+          152
+        ],
+        [
+          40,
+          152
+        ],
+        [
+          40,
+          168
+        ],
+        [
+          0,
+          168
+        ]
+      ],
+      "heightM": 75
+    },
+    {
+      "id": "apt-103",
+      "kind": "APARTMENT",
+      "name": "103동",
+      "footprint": [
+        [
+          100,
+          152
+        ],
+        [
+          140,
+          152
+        ],
+        [
+          140,
+          168
+        ],
+        [
+          100,
+          168
+        ]
+      ],
+      "heightM": 84
+    },
+    {
+      "id": "apt-104",
+      "kind": "APARTMENT",
+      "name": "104동",
+      "footprint": [
+        [
+          200,
+          152
+        ],
+        [
+          240,
+          152
+        ],
+        [
+          240,
+          168
+        ],
+        [
+          200,
+          168
+        ]
+      ],
+      "heightM": 69
+    },
+    {
+      "id": "apt-105",
+      "kind": "APARTMENT",
+      "name": "105동",
+      "footprint": [
+        [
+          -100,
+          12
+        ],
+        [
+          -60,
+          12
+        ],
+        [
+          -60,
+          28
+        ],
+        [
+          -100,
+          28
+        ]
+      ],
+      "heightM": 45
+    },
+    {
+      "id": "apt-106",
+      "kind": "APARTMENT",
+      "name": "106동",
+      "footprint": [
+        [
+          0,
+          12
+        ],
+        [
+          40,
+          12
+        ],
+        [
+          40,
+          28
+        ],
+        [
+          0,
+          28
+        ]
+      ],
+      "heightM": 72
+    },
+    {
+      "id": "apt-107",
+      "kind": "APARTMENT",
+      "name": "107동",
+      "footprint": [
+        [
+          100,
+          12
+        ],
+        [
+          140,
+          12
+        ],
+        [
+          140,
+          28
+        ],
+        [
+          100,
+          28
+        ]
+      ],
+      "heightM": 87
+    },
+    {
+      "id": "apt-108",
+      "kind": "APARTMENT",
+      "name": "108동",
+      "footprint": [
+        [
+          200,
+          12
+        ],
+        [
+          240,
+          12
+        ],
+        [
+          240,
+          28
+        ],
+        [
+          200,
+          28
+        ]
+      ],
+      "heightM": 66
+    },
+    {
+      "id": "apt-109",
+      "kind": "APARTMENT",
+      "name": "109동",
+      "footprint": [
+        [
+          -100,
+          -148
+        ],
+        [
+          -60,
+          -148
+        ],
+        [
+          -60,
+          -132
+        ],
+        [
+          -100,
+          -132
+        ]
+      ],
+      "heightM": 57
+    },
+    {
+      "id": "apt-110",
+      "kind": "APARTMENT",
+      "name": "110동",
+      "footprint": [
+        [
+          0,
+          -148
+        ],
+        [
+          40,
+          -148
+        ],
+        [
+          40,
+          -132
+        ],
+        [
+          0,
+          -132
+        ]
+      ],
+      "heightM": 81
+    },
+    {
+      "id": "apt-111",
+      "kind": "APARTMENT",
+      "name": "111동",
+      "footprint": [
+        [
+          100,
+          -148
+        ],
+        [
+          140,
+          -148
+        ],
+        [
+          140,
+          -132
+        ],
+        [
+          100,
+          -132
+        ]
+      ],
+      "heightM": 75
+    },
+    {
+      "id": "apt-112",
+      "kind": "APARTMENT",
+      "name": "112동",
+      "footprint": [
+        [
+          200,
+          -148
+        ],
+        [
+          240,
+          -148
+        ],
+        [
+          240,
+          -132
+        ],
+        [
+          200,
+          -132
+        ]
+      ],
+      "heightM": 54
+    },
+    {
+      "id": "apt-113",
+      "kind": "APARTMENT",
+      "name": "113동",
+      "footprint": [
+        [
+          -32,
+          -72
+        ],
+        [
+          -8,
+          -72
+        ],
+        [
+          -8,
+          -48
+        ],
+        [
+          -32,
+          -48
+        ]
+      ],
+      "heightM": 105
+    },
+    {
+      "id": "com-a",
+      "kind": "COMMERCIAL",
+      "name": "상가 A",
+      "footprint": [
+        [
+          -270,
+          105
+        ],
+        [
+          -210,
+          105
+        ],
+        [
+          -210,
+          135
+        ],
+        [
+          -270,
+          135
+        ]
+      ],
+      "heightM": 15
+    },
+    {
+      "id": "com-b",
+      "kind": "COMMERCIAL",
+      "name": "상가 B",
+      "footprint": [
+        [
+          -265,
+          -20
+        ],
+        [
+          -215,
+          -20
+        ],
+        [
+          -215,
+          20
+        ],
+        [
+          -265,
+          20
+        ]
+      ],
+      "heightM": 20
+    },
+    {
+      "id": "com-c",
+      "kind": "COMMERCIAL",
+      "name": "상가 C",
+      "footprint": [
+        [
+          -260,
+          -165
+        ],
+        [
+          -200,
+          -165
+        ],
+        [
+          -200,
+          -135
+        ],
+        [
+          -260,
+          -135
+        ]
+      ],
+      "heightM": 12
+    }
+  ],
+  "docks": [
+    {
+      "id": "dock-a",
+      "name": "도크 A",
+      "buildingId": "com-a",
+      "position": {
+        "x": -240,
+        "y": 120,
+        "z": 15
+      },
+      "pads": 4
+    },
+    {
+      "id": "dock-c",
+      "name": "도크 C",
+      "buildingId": "com-c",
+      "position": {
+        "x": -230,
+        "y": -150,
+        "z": 12
+      },
+      "pads": 4
+    }
+  ],
+  "stores": [
+    {
+      "id": "store-chicken",
+      "name": "치킨집",
+      "buildingId": "com-a",
+      "position": {
+        "x": -210,
+        "y": 115,
+        "z": 0
+      },
+      "dockId": "dock-a",
+      "walkToDockSec": 90
+    },
+    {
+      "id": "store-pizza",
+      "name": "피자집",
+      "buildingId": "com-b",
+      "position": {
+        "x": -215,
+        "y": 8,
+        "z": 0
+      },
+      "dockId": "dock-a",
+      "walkToDockSec": 240
+    },
+    {
+      "id": "store-bunsik",
+      "name": "분식집",
+      "buildingId": "com-b",
+      "position": {
+        "x": -215,
+        "y": -8,
+        "z": 0
+      },
+      "dockId": "dock-c",
+      "walkToDockSec": 210
+    },
+    {
+      "id": "store-cafe",
+      "name": "카페",
+      "buildingId": "com-c",
+      "position": {
+        "x": -200,
+        "y": -155,
+        "z": 0
+      },
+      "dockId": "dock-c",
+      "walkToDockSec": 80
+    }
+  ],
+  "stations": [
+    {
+      "id": "station-n",
+      "name": "북측 스테이션",
+      "position": {
+        "x": 70,
+        "y": 90,
+        "z": 0
+      },
+      "pads": 3,
+      "couriers": 2,
+      "servesBuildingIds": [
+        "apt-101",
+        "apt-102",
+        "apt-103",
+        "apt-104",
+        "apt-105",
+        "apt-106"
+      ]
+    },
+    {
+      "id": "station-s",
+      "name": "남측 스테이션",
+      "position": {
+        "x": 170,
+        "y": -60,
+        "z": 0
+      },
+      "pads": 3,
+      "couriers": 2,
+      "servesBuildingIds": [
+        "apt-107",
+        "apt-108",
+        "apt-109",
+        "apt-110",
+        "apt-111",
+        "apt-112",
+        "apt-113"
+      ]
+    }
+  ],
+  "noFlyZones": [
+    {
+      "id": "nfz-1",
+      "name": "비행금지구역 (가상 변전소)",
+      "center": {
+        "x": -150,
+        "y": 100
+      },
+      "radiusM": 35,
+      "minZ": 0,
+      "maxZ": 150
+    }
+  ]
+}
