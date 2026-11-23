@@ -1,12 +1,17 @@
 'use client';
 
 import dynamic from 'next/dynamic';
+import { useMemo } from 'react';
 import { defaultMap } from '@/sim/map/defaultMap';
-import { defaultMapLabels } from './labels/labels';
-import { LabelLayer } from './labels/LabelLayer';
+import { useSimStore } from '@/store/simStore';
 import { useViewStore } from '@/store/viewStore';
+import { type LabelSpec, defaultMapLabels } from './labels/labels';
+import { LabelLayer } from './labels/LabelLayer';
+import { phaseColor, phaseLabel } from './phase';
+import { DronePanel } from './ui/DronePanel';
 import { MapLegend } from './ui/MapLegend';
 import { Minimap } from './ui/Minimap';
+import { SimControls } from './ui/SimControls';
 import { ViewControls } from './ui/ViewControls';
 
 // WebGL 은 브라우저에서만 동작하므로 3D 캔버스는 SSR 에서 제외한다
@@ -17,21 +22,48 @@ const SimCanvas = dynamic(() => import('./scene/SimCanvas'), {
 
 export default function SimApp() {
   const showLabels = useViewStore((s) => s.showLabels);
+  const followDroneId = useViewStore((s) => s.followDroneId);
+  // 라벨 텍스트는 단계·배터리가 바뀔 때만 갱신된다 (위치는 매 프레임 Drones 가 갱신)
+  const droneLabelKey = useSimStore((s) => s.drones.map((d) => `${d.id}|${d.phase}|${Math.round(d.battery * 100)}`).join(','));
+
+  const labels = useMemo<LabelSpec[]>(() => {
+    const droneLabels: LabelSpec[] = droneLabelKey
+      .split(',')
+      .filter(Boolean)
+      .map((k) => {
+        const [id, phase, battery] = k.split('|') as [string, keyof typeof phaseLabel, string];
+        return {
+          id: `drone:${id}`,
+          text: `${id} ${phaseLabel[phase]}`,
+          sub: `${battery}%`,
+          color: phaseColor[phase],
+          anchor: [0, -1000, 0],
+          dynamic: true,
+          highlight: id === followDroneId,
+        };
+      });
+    return [...defaultMapLabels, ...droneLabels];
+  }, [droneLabelKey, followDroneId]);
+
   return (
     <main className="relative h-screen w-screen overflow-hidden bg-[#cfe3f2]">
       <div className="absolute inset-0">
         <SimCanvas />
       </div>
-      <LabelLayer labels={defaultMapLabels} visible={showLabels} />
-      <div className="pointer-events-none absolute inset-0 p-4">
+      <LabelLayer labels={labels} visible={showLabels} />
+      <div className="pointer-events-none absolute inset-0 z-10">
         <div className="pointer-events-auto absolute left-4 top-4">
           <MapLegend map={defaultMap} />
         </div>
-        <div className="pointer-events-auto absolute right-4 top-4">
+        <div className="pointer-events-auto absolute right-4 top-4 flex flex-col items-end gap-2">
           <ViewControls />
+          <DronePanel />
         </div>
         <div className="pointer-events-auto absolute bottom-4 left-4">
           <Minimap map={defaultMap} />
+        </div>
+        <div className="pointer-events-auto absolute bottom-4 left-1/2 w-max max-w-[calc(100vw-2rem)] -translate-x-1/2">
+          <SimControls />
         </div>
       </div>
     </main>

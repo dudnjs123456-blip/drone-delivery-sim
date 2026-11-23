@@ -3,7 +3,9 @@
 import type { MouseEvent } from 'react';
 import { palette } from '@/components/scene/palette';
 import type { MapData } from '@/sim/types';
+import { useSimStore } from '@/store/simStore';
 import { useViewStore } from '@/store/viewStore';
+import { phaseColor } from '../phase';
 
 /**
  * 상단 2D 미니맵. SVG 좌표는 (x, -y) 로 그려 북쪽이 위로 오게 한다.
@@ -12,6 +14,7 @@ import { useViewStore } from '@/store/viewStore';
 export function Minimap({ map }: { map: MapData }) {
   const camera = useViewStore((s) => s.camera);
   const requestFocus = useViewStore((s) => s.requestFocus);
+  const drones = useSimStore((s) => s.drones);
   const { minX, minY, maxX, maxY } = map.bounds;
   const w = maxX - minX;
   const h = maxY - minY;
@@ -79,6 +82,21 @@ export function Minimap({ map }: { map: MapData }) {
         ))}
         {map.stores.map((s) => (
           <circle key={s.id} cx={s.position.x} cy={-s.position.y} r={5} fill={palette.store} />
+        ))}
+        {drones.map((d) =>
+          d.path.length >= 2 ? (
+            <polyline
+              key={`path-${d.id}`}
+              points={d.path.map((p) => `${p.x},${-p.y}`).join(' ')}
+              fill="none"
+              stroke={d.phase === 'RETURN' ? '#475569' : '#0284c7'}
+              strokeWidth={3}
+              strokeDasharray={d.phase === 'RETURN' ? '8 6' : undefined}
+            />
+          ) : null,
+        )}
+        {drones.map((d) => (
+          <circle key={d.id} cx={d.position.x} cy={-d.position.y} r={8} fill={phaseColor[d.phase]} stroke="white" strokeWidth={2.5} />
         ))}
         {/* 카메라 → 바라보는 지점 */}
         <line

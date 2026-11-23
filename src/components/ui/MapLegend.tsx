@@ -19,7 +19,7 @@ export function MapLegend({ map }: { map: MapData }) {
   return (
     <div className="w-64 rounded-lg bg-white/90 p-3 text-sm shadow-lg backdrop-blur">
       <h1 className="text-base font-bold text-slate-900">드론 배송 시뮬레이터</h1>
-      <p className="mb-2 text-xs text-slate-500">{map.name} · M1 장면</p>
+      <p className="mb-2 text-xs text-slate-500">{map.name} · M2 드론 1대 비행</p>
       <ul className="space-y-1">
         {items.map((it) => (
           <li key={it.label} className="flex items-center gap-2 text-slate-700">

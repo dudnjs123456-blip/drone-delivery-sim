@@ -5,6 +5,7 @@ import { useFrame, useThree } from '@react-three/fiber';
 import { type ComponentRef, useEffect, useMemo, useRef } from 'react';
 import * as THREE from 'three';
 import type { MapData } from '@/sim/types';
+import { engine, runner } from '@/store/simStore';
 import { useViewStore } from '@/store/viewStore';
 import { enuToThree, threeToEnu } from '../coords';
 
@@ -25,6 +26,8 @@ export function CameraRig({ map }: { map: MapData }) {
   const viewMode = useViewStore((s) => s.viewMode);
   const focusRequest = useViewStore((s) => s.focusRequest);
   const setCamera = useViewStore((s) => s.setCamera);
+  const followDroneId = useViewStore((s) => s.followDroneId);
+  const followTmp = useMemo(() => ({ v: new THREE.Vector3(), p: { x: 0, y: 0, z: 0 } }), []);
 
   const anim = useRef<Pose | null>(null);
   const reportAcc = useRef(0);
@@ -77,6 +80,19 @@ export function CameraRig({ map }: { map: MapData }) {
         c.target.copy(anim.current.target);
         c.update();
         anim.current = null;
+      }
+    }
+
+    // 드론 따라가기: 목표점을 드론 쪽으로 부드럽게 옮기고 카메라도 같은 만큼 이동
+    if (followDroneId && !anim.current) {
+      const d = engine.getSnapshot().drones.find((x) => x.id === followDroneId);
+      if (d) {
+        const p = runner.interpolatedPosition(d, followTmp.p);
+        const k = 1 - Math.exp(-delta * 8);
+        followTmp.v.set(p.x, p.z, -p.y).sub(c.target).multiplyScalar(k);
+        c.target.add(followTmp.v);
+        camera.position.add(followTmp.v);
+        c.update();
       }
     }
 

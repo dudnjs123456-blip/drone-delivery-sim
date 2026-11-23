@@ -2,7 +2,9 @@
  * 3D 위치에 붙는 DOM 라벨.
  * LabelLayer(캔버스 밖 DOM)가 라벨을 그리고, LabelProjector(캔버스 안)가 매 프레임
  * 화면 좌표를 계산해 style.transform 만 갱신한다. React 리렌더 없이 위치가 따라간다.
+ * 움직이는 라벨(dynamic)은 앵커를 소유한 컴포넌트가 labelAnchors 의 벡터를 매 프레임 갱신한다.
  */
+import * as THREE from 'three';
 import { defaultMap } from '@/sim/map/defaultMap';
 import type { MapData } from '@/sim/types';
 import { polygonCentroid } from '@/sim/util/geometry';
@@ -17,10 +19,23 @@ export interface LabelSpec {
   color?: string;
   /** Three.js 좌표. 라벨의 아래쪽 가운데가 이 점에 붙는다 */
   anchor: ThreeTuple;
+  /** true 면 anchor 는 초기값이고, 이후 위치는 다른 컴포넌트가 labelAnchors 로 갱신한다 */
+  dynamic?: boolean;
+  /** 강조 표시 (굵은 테두리) */
+  highlight?: boolean;
 }
 
 /** LabelLayer 가 등록하고 LabelProjector 가 읽는 DOM 요소 */
 export const labelElements = new Map<string, HTMLElement>();
+/** 라벨 id → 3D 앵커 (Three.js 좌표) */
+export const labelAnchors = new Map<string, THREE.Vector3>();
+
+/** 움직이는 라벨의 앵커를 갱신한다 (없으면 만든다) */
+export function setLabelAnchor(id: string, x: number, y: number, z: number) {
+  const v = labelAnchors.get(id);
+  if (v) v.set(x, y, z);
+  else labelAnchors.set(id, new THREE.Vector3(x, y, z));
+}
 
 export function buildMapLabels(map: MapData): LabelSpec[] {
   const labels: LabelSpec[] = [];

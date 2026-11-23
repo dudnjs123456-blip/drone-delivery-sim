@@ -22,6 +22,14 @@ export interface SimConfig {
     enduranceSec: number;
     /** 풍속 1 m/s 당 배터리 소모율 증가 비율 (0.04 → 10 m/s 에서 1.4배) */
     batteryWindFactorPerMs: number;
+    /** 스테이션 착륙 후 하역에 걸리는 시간 (s) */
+    stationDwellSec: number;
+    /** 중간 웨이포인트를 통과한 것으로 보는 반경 (m) */
+    waypointAcceptM: number;
+    /** 감속 계획에 쓰는 가속도 비율 (최대 가속도 대비). 1 미만이어야 추종 여유가 생긴다 */
+    brakeAccelRatio: number;
+    /** 급회전 웨이포인트에서 허용하는 최저 속도 비율 */
+    minCornerSpeedRatio: number;
   };
   altitude: {
     cruiseM: number;
@@ -37,6 +45,12 @@ export interface SimConfig {
   traffic: {
     /** 드론 간 최소 이격 거리 (m) */
     minSeparationM: number;
+  };
+  fleet: {
+    /** 운용 드론 수. 도크에 순서대로 나눠 배치한다 */
+    droneCount: number;
+    /** 시험 비행(FLY_MISSION) 기본 탑재 중량 (kg) */
+    missionPayloadKg: number;
   };
 }
 
@@ -54,6 +68,10 @@ export const defaultConfig: SimConfig = {
     maxPayloadKg: 3,
     enduranceSec: 20 * 60,
     batteryWindFactorPerMs: 0.04,
+    stationDwellSec: 30,
+    waypointAcceptM: 3,
+    brakeAccelRatio: 0.8,
+    minCornerSpeedRatio: 0.2,
   },
   altitude: {
     cruiseM: 60,
@@ -65,5 +83,9 @@ export const defaultConfig: SimConfig = {
   },
   traffic: {
     minSeparationM: 15,
+  },
+  fleet: {
+    droneCount: 1,
+    missionPayloadKg: 1.5,
   },
 };

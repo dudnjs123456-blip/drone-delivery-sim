@@ -3,13 +3,15 @@
 import { Grid } from '@react-three/drei';
 import { Canvas } from '@react-three/fiber';
 import { defaultMap } from '@/sim/map/defaultMap';
-import { defaultMapLabels } from '../labels/labels';
 import { LabelProjector } from '../labels/LabelProjector';
 import { enuToThree } from '../coords';
 import { Buildings } from './Buildings';
 import { CameraRig } from './CameraRig';
+import { DronePaths } from './DronePaths';
+import { Drones } from './Drones';
 import { Docks, NoFlyZones, Stations, Stores } from './Facilities';
 import { palette } from './palette';
+import { SimDriver } from './SimDriver';
 
 export default function SimCanvas() {
   const map = defaultMap;
@@ -26,6 +28,8 @@ export default function SimCanvas() {
       dpr={[1, 2]}
       camera={{ fov: 50, near: 1, far: 5000, position: enuToThree(cx - 330, cy - 380, 300) }}
     >
+      {/* 시뮬레이션 진행이 같은 프레임의 다른 useFrame 보다 먼저 실행되도록 첫 자식에 둔다 */}
+      <SimDriver />
       <color attach="background" args={[palette.sky]} />
       <fog attach="fog" args={[palette.sky, 1200, 3000]} />
 
@@ -68,7 +72,10 @@ export default function SimCanvas() {
       <Stores stores={map.stores} />
       <NoFlyZones zones={map.noFlyZones} />
 
-      <LabelProjector labels={defaultMapLabels} />
+      <Drones />
+      <DronePaths />
+
+      <LabelProjector />
 
       <CameraRig map={map} />
     </Canvas>
