@@ -11,9 +11,28 @@ export type SimCommand =
   | { type: 'FLY_MISSION'; fromDockId: string; toStationId: string; droneId?: string; payloadKg?: number }
   | { type: 'CREATE_ORDER'; storeId?: string; destBuildingId?: string }
   | { type: 'SET_PEAK_MODE'; ordersPerMin: number | null }
-  | { type: 'SET_WIND'; fromDirRad: number; meanSpeed: number; gustiness: number };
+  | { type: 'SET_WIND'; fromDirRad: number; meanSpeed: number; gustiness: number }
+  /** 시간-공간 예약 테이블 사용 여부 (끄면 충돌 회피 없이 바로 출발 — 비교용) */
+  | { type: 'SET_RESERVATIONS'; enabled: boolean };
 
-export type DispatchResult = { ok: true } | { ok: false; reason: string };
+export type DispatchResult = { ok: true; droneId?: string; orderId?: string } | { ok: false; reason: string };
+
+export interface TrafficStats {
+  reservationsEnabled: boolean;
+  /** 현재 최소 이격 거리를 어기고 있는 드론 쌍 수 */
+  activeViolations: number;
+  /** 누적 위반 발생 횟수 (쌍이 새로 가까워질 때마다 1) */
+  violationEvents: number;
+  /** 예약된 (시간 칸, 셀) 수 */
+  reservedCells: number;
+  missionsScheduled: number;
+  /** 충돌 회피로 늘어난 평균 출발 지연 (s) */
+  avgTrafficDelaySec: number;
+  /** 기본 순항 고도가 아닌 고도로 배정된 비율 */
+  altitudeShiftRatio: number;
+  /** 드론 배정을 기다리는 주문 수 */
+  queuedOrders: number;
+}
 
 export interface PhaseChange {
   t: number;
@@ -25,7 +44,7 @@ export interface PhaseChange {
 export type SimEvent =
   | ({ type: 'PHASE_CHANGED' } & PhaseChange)
   | { type: 'ORDER_DELIVERED'; orderId: string }
-  | { type: 'SEPARATION_VIOLATION'; droneIds: [string, string]; distM: number }
+  | { type: 'SEPARATION_VIOLATION'; droneIds: [string, string]; distM: number; t: number }
   | { type: 'FLIGHT_SUSPENDED'; reason: 'MEAN_WIND' | 'GUST' };
 
 /**
@@ -40,6 +59,9 @@ export interface SimSnapshot {
   activeAlerts: readonly SimEvent[];
   /** 최근 비행 단계 전환 기록 (오래된 것부터) */
   phaseLog: readonly PhaseChange[];
+  traffic: TrafficStats;
+  /** 피크 모드 주문 수 (건/분), 꺼져 있으면 null */
+  peakOrdersPerMin: number | null;
 }
 
 export interface SimEngine {

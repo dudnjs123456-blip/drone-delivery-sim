@@ -71,6 +71,18 @@ export class PathPlanner {
     return this.result(this.smooth(raw), raw, res.expanded, t0);
   }
 
+  /**
+   * 이미 계획한 경로의 양 끝만 가까운 다른 점(같은 도크의 다른 슬롯, 같은 스테이션의 다른 패드)으로 바꾼다.
+   * 바뀐 첫·마지막 구간이 장애물에 막히면 null (그때는 새로 계획해야 한다).
+   */
+  reanchor(base: Extract<PlanResult, { ok: true }>, start: Vec3, goal: Vec3): PlanResult | null {
+    const t0 = now();
+    const mid = base.path.slice(1, -1);
+    const path = [start, ...mid, goal];
+    if (!this.los(path[0], path[1]) || !this.los(path[path.length - 2], path[path.length - 1])) return null;
+    return this.result(path, base.rawPath, base.expanded, t0);
+  }
+
   /** 앞에서부터 가장 멀리 보이는 점으로 건너뛰는 탐욕적 평활화 */
   smooth(pts: Vec3[]): Vec3[] {
     const out = [pts[0]];

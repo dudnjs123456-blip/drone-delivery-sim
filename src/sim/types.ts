@@ -55,9 +55,12 @@ export interface Dock {
   id: string;
   name?: string;
   buildingId: string;
-  /** 패드 중심. z 는 옥상 높이와 같아야 한다 */
+  /** 도크 중심. z 는 옥상 높이와 같아야 한다 */
   position: Vec3;
+  /** 이착륙 패드 수 (옥상 긴 변을 따라 배치) */
   pads: number;
+  /** 격납고(대기 드론) 칸 수. 기본 9 */
+  parking?: number;
 }
 
 /** 단지 내 착륙 스테이션 */
@@ -105,6 +108,12 @@ export interface Drone {
   pathIndex: number;
   /** 현재 비행의 순항 구간 경로 탐색 정보 */
   route: RouteInfo | null;
+  /** 배정되어 출발을 기다리는 경우 예정 출발 시각 */
+  departAt: number | null;
+  /** 배터리 교체 중이면 끝나는 시각 */
+  swapUntil: number | null;
+  /** 이번 비행의 순항 고도 (충돌 회피로 바뀔 수 있다) */
+  cruiseAltM: number | null;
 }
 
 export interface RouteInfo {
@@ -146,6 +155,8 @@ export interface Order {
   /** 각 시점의 시뮬레이션 시각(s). 구간 시간은 이 값들의 차이로 계산한다 */
   t: {
     created: number;
+    /** 드론·예약이 확정된 시각 */
+    assigned?: number;
     cookDone?: number;
     atDock?: number;
     takeoff?: number;

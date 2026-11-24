@@ -6,12 +6,13 @@
 import { create } from 'zustand';
 import { defaultConfig } from '@/sim/config';
 import { LocalSimEngine } from '@/sim/engine/LocalSimEngine';
-import type { PhaseChange, SimEngine } from '@/sim/engine/SimEngine';
+import type { PhaseChange, SimEngine, SimEvent, TrafficStats } from '@/sim/engine/SimEngine';
 import { SimRunner } from '@/sim/engine/SimRunner';
 import { buildTripLegs, flattenLegs } from '@/sim/flight/route';
 import { defaultMap } from '@/sim/map/defaultMap';
+import { dockLaunchPads, stationPads } from '@/sim/map/pads';
 import { type PlanResult, PathPlanner } from '@/sim/pathfinding/planner';
-import type { FlightPhase, RouteInfo, Vec3 } from '@/sim/types';
+import type { FlightPhase, Order, OrderStatus, RouteInfo, Vec3 } from '@/sim/types';
 
 export const engine: SimEngine = new LocalSimEngine();
 engine.load(defaultMap, defaultConfig, 1);
@@ -34,10 +35,11 @@ function computePreview(dockId: string, stationId: string): RoutePreview | null 
   if (!dock || !station) return null;
   previewPlanner ??= new PathPlanner(defaultMap, defaultConfig);
   const z = defaultConfig.altitude.cruiseM;
-  const result = previewPlanner.plan({ ...dock.position, z }, { ...station.position, z });
-  const fullPath = result.ok
-    ? flattenLegs(buildTripLegs(dock.position, station.position, z, result.path.slice(1, -1))).path
-    : [];
+  // 실제 비행과 같이 첫 번째 도크 패드 → 첫 번째 스테이션 패드
+  const from = dockLaunchPads(defaultMap, dock)[0];
+  const to = stationPads(station)[0];
+  const result = previewPlanner.plan({ ...from, z }, { ...to, z });
+  const fullPath = result.ok ? flattenLegs(buildTripLegs(from, to, z, result.path.slice(1, -1))).path : [];
   return { dockId, stationId, result, fullPath };
 }
 
@@ -49,10 +51,23 @@ export interface DroneView {
   battery: number;
   payloadKg: number;
   homeDockId: string;
+  orderId: string | null;
   /** 엔진의 경로 배열 참조 (비행마다 새 배열이 된다) */
   path: readonly Vec3[];
   pathIndex: number;
   route: RouteInfo | null;
+  departAt: number | null;
+  swapUntil: number | null;
+  cruiseAltM: number | null;
+}
+
+export interface OrderSummary {
+  total: number;
+  byStatus: Partial<Record<OrderStatus, number>>;
+  /** 완료 주문 평균: 주문 → 이륙, 주문 → 완료 (s) */
+  avgWaitSec: number | null;
+  avgTotalSec: number | null;
+  recent: Order[];
 }
 
 interface SimUiState {
@@ -61,6 +76,10 @@ interface SimUiState {
   time: number;
   drones: DroneView[];
   phaseLog: readonly PhaseChange[];
+  orders: OrderSummary;
+  traffic: TrafficStats;
+  alerts: readonly SimEvent[];
+  peakOrdersPerMin: number | null;
   message: { text: string; ok: boolean } | null;
   selection: { dockId: string; stationId: string };
   preview: RoutePreview | null;
@@ -69,6 +88,9 @@ interface SimUiState {
   togglePause: () => void;
   reset: () => void;
   flyMission: () => void;
+  createOrder: () => void;
+  setPeak: (perMin: number | null) => void;
+  setReservations: (enabled: boolean) => void;
   publish: () => void;
 }
 
@@ -81,10 +103,38 @@ function readDrones(): DroneView[] {
     battery: d.battery,
     payloadKg: d.payloadKg,
     homeDockId: d.homeDockId,
+    orderId: d.orderId,
     path: d.path,
     pathIndex: d.pathIndex,
     route: d.route,
+    departAt: d.departAt,
+    swapUntil: d.swapUntil,
+    cruiseAltM: d.cruiseAltM,
   }));
+}
+
+const RECENT_ORDERS = 8;
+
+function summarizeOrders(orders: readonly Order[]): OrderSummary {
+  const byStatus: Partial<Record<OrderStatus, number>> = {};
+  let waitSum = 0;
+  let totalSum = 0;
+  let done = 0;
+  for (const o of orders) {
+    byStatus[o.status] = (byStatus[o.status] ?? 0) + 1;
+    if (o.status === 'DELIVERED' && o.t.takeoff !== undefined && o.t.delivered !== undefined) {
+      waitSum += o.t.takeoff - o.t.created;
+      totalSum += o.t.delivered - o.t.created;
+      done++;
+    }
+  }
+  return {
+    total: orders.length,
+    byStatus,
+    avgWaitSec: done ? waitSum / done : null,
+    avgTotalSec: done ? totalSum / done : null,
+    recent: orders.slice(-RECENT_ORDERS).reverse().map((o) => ({ ...o, t: { ...o.t } })),
+  };
 }
 
 export const useSimStore = create<SimUiState>((set, get) => ({
@@ -93,6 +143,10 @@ export const useSimStore = create<SimUiState>((set, get) => ({
   time: 0,
   drones: readDrones(),
   phaseLog: [],
+  orders: summarizeOrders([]),
+  traffic: engine.getSnapshot().traffic,
+  alerts: [],
+  peakOrdersPerMin: null,
   message: null,
   selection: { dockId: defaultMap.docks[0].id, stationId: defaultMap.stations[0].id },
   preview: null,
@@ -117,7 +171,20 @@ export const useSimStore = create<SimUiState>((set, get) => ({
   flyMission: () => {
     const { dockId, stationId } = get().selection;
     const r = engine.dispatch({ type: 'FLY_MISSION', fromDockId: dockId, toStationId: stationId });
-    set({ message: r.ok ? { text: '출발했습니다', ok: true } : { text: r.reason, ok: false } });
+    set({ message: r.ok ? { text: `${r.droneId} 배정`, ok: true } : { text: r.reason, ok: false } });
+    get().publish();
+  },
+  createOrder: () => {
+    const r = engine.dispatch({ type: 'CREATE_ORDER' });
+    set({ message: r.ok ? { text: `주문 ${r.orderId} 접수`, ok: true } : { text: r.reason, ok: false } });
+    get().publish();
+  },
+  setPeak: (perMin) => {
+    engine.dispatch({ type: 'SET_PEAK_MODE', ordersPerMin: perMin });
+    get().publish();
+  },
+  setReservations: (enabled) => {
+    engine.dispatch({ type: 'SET_RESERVATIONS', enabled });
     get().publish();
   },
   publish: () => {
@@ -131,6 +198,10 @@ export const useSimStore = create<SimUiState>((set, get) => ({
         s.phaseLog.length === log.length && s.phaseLog[s.phaseLog.length - 1] === log[log.length - 1]
           ? s.phaseLog
           : log.slice(),
+      orders: summarizeOrders(snap.orders),
+      traffic: { ...snap.traffic },
+      alerts: snap.activeAlerts.length === 0 && s.alerts.length === 0 ? s.alerts : snap.activeAlerts.slice(),
+      peakOrdersPerMin: snap.peakOrdersPerMin,
     }));
   },
 }));

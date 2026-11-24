@@ -92,11 +92,12 @@ function PreviewBox() {
   );
 }
 
-function DroneCard({ d }: { d: DroneView }) {
+export function DroneCard({ d }: { d: DroneView }) {
   const time = useSimStore((s) => s.time);
   const phaseLog = useSimStore((s) => s.phaseLog);
   const followDroneId = useViewStore((s) => s.followDroneId);
   const setFollow = useViewStore((s) => s.setFollow);
+  const setSelected = useViewStore((s) => s.setSelected);
   const following = followDroneId === d.id;
 
   const hs = Math.hypot(d.velocity.x, d.velocity.y);
@@ -119,6 +120,20 @@ function DroneCard({ d }: { d: DroneView }) {
         >
           {following ? '따라가는 중' : '따라가기'}
         </button>
+        <button onClick={() => setSelected(null)} className="rounded px-1.5 text-slate-400 hover:text-slate-700" title="닫기">
+          ✕
+        </button>
+      </div>
+
+      <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-slate-600">
+        {d.orderId && <span>주문 <b className="text-slate-800">{d.orderId}</b></span>}
+        {d.cruiseAltM !== null && <span>편도 순항 <b className="text-slate-800">{d.cruiseAltM}m</b></span>}
+        {d.departAt !== null && (
+          <span className="text-amber-700">출발 예정 T-{Math.max(0, d.departAt - time).toFixed(0)}s</span>
+        )}
+        {d.swapUntil !== null && (
+          <span className="text-violet-700">배터리 교체 중 ({Math.max(0, d.swapUntil - time).toFixed(0)}s)</span>
+        )}
       </div>
 
       <div className="grid grid-cols-3 gap-1">
@@ -178,16 +193,3 @@ function DroneCard({ d }: { d: DroneView }) {
   );
 }
 
-export function DronePanel() {
-  const drones = useSimStore((s) => s.drones);
-  return (
-    <div className="w-80 rounded-lg bg-white/95 p-3 shadow-lg backdrop-blur">
-      <div className="mb-2 text-sm font-bold text-slate-900">드론 상태</div>
-      <div className="space-y-3">
-        {drones.map((d) => (
-          <DroneCard key={d.id} d={d} />
-        ))}
-      </div>
-    </div>
-  );
-}

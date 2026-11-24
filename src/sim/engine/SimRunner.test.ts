@@ -7,7 +7,7 @@ import { SimRunner } from './SimRunner';
 /** 스텝 수를 세고, 매 스텝 x 를 1 늘리는 가짜 엔진 */
 function fakeEngine() {
   const drone = { id: 'D01', position: { x: 0, y: 0, z: 0 } } as Drone;
-  const snap = { time: 0, drones: [drone], orders: [], wind: { fromDirRad: 0, meanSpeed: 0, gustSpeed: 0 }, activeAlerts: [], phaseLog: [] } as SimSnapshot;
+  const snap = { time: 0, drones: [drone], orders: [], wind: { fromDirRad: 0, meanSpeed: 0, gustSpeed: 0 }, activeAlerts: [], phaseLog: [] } as unknown as SimSnapshot;
   const e = {
     steps: 0,
     load() {},

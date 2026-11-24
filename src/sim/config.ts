@@ -30,6 +30,14 @@ export interface SimConfig {
     brakeAccelRatio: number;
     /** 급회전 웨이포인트에서 허용하는 최저 속도 비율 */
     minCornerSpeedRatio: number;
+    /** 도크 복귀 후 배터리가 이 비율 미만이면 교체한다 */
+    swapBelowBattery: number;
+    /** 배터리 교체 시간 (s) */
+    batterySwapSec: number;
+    /** 임무 배정 시 예상 소모량에 곱하는 안전 계수 */
+    batterySafetyFactor: number;
+    /** 임무 후에도 남아 있어야 하는 최소 배터리 비율 */
+    batteryReserve: number;
   };
   altitude: {
     cruiseM: number;
@@ -43,8 +51,29 @@ export interface SimConfig {
     suspendGustMs: number;
   };
   traffic: {
-    /** 드론 간 최소 이격 거리 (m) */
+    /** 드론 간 최소 이격 거리 (m). 예약 테이블 셀 크기로도 쓴다 */
     minSeparationM: number;
+    /** 시간-공간 예약 테이블 사용 여부 (끄면 충돌 회피 없이 바로 출발) */
+    useReservations: boolean;
+    /** 예약 테이블 시간 칸 (s) */
+    slotSec: number;
+    /**
+     * 방향별 고도 분리: [편도 고도, 복귀 고도] 후보 (m). 앞의 것부터 시도한다.
+     * 편도와 복귀가 같은 고도면 같은 통로에서 정면으로 마주치므로 셀 2칸(30m) 이상 떨어뜨린다.
+     * 모두 경로 탐색 고도층 위에 있어야 한다.
+     */
+    altitudePairsM: readonly (readonly [number, number])[];
+    /** 혼잡으로 배정에 실패한 주문을 다시 시도하기까지 기다리는 시간 (s) */
+    retryAfterSec: number;
+    /** 출발 지연 후보 간격과 최대값 (s) */
+    delayStepSec: number;
+    maxDepartureDelaySec: number;
+  };
+  orders: {
+    weightMinKg: number;
+    weightMaxKg: number;
+    /** 피크 모드 기본 주문 수 (건/분) */
+    defaultPeakPerMin: number;
   };
   pathfinding: {
     /** 격자 수평 크기 (m) */
@@ -88,6 +117,10 @@ export const defaultConfig: SimConfig = {
     waypointAcceptM: 3,
     brakeAccelRatio: 0.8,
     minCornerSpeedRatio: 0.2,
+    swapBelowBattery: 0.5,
+    batterySwapSec: 60,
+    batterySafetyFactor: 1.25,
+    batteryReserve: 0.15,
   },
   altitude: {
     cruiseM: 60,
@@ -99,6 +132,20 @@ export const defaultConfig: SimConfig = {
   },
   traffic: {
     minSeparationM: 15,
+    useReservations: true,
+    slotSec: 1,
+    altitudePairsM: [
+      [60, 90],
+      [120, 90],
+    ],
+    retryAfterSec: 5,
+    delayStepSec: 5,
+    maxDepartureDelaySec: 180,
+  },
+  orders: {
+    weightMinKg: 0.5,
+    weightMaxKg: 2.5,
+    defaultPeakPerMin: 3,
   },
   pathfinding: {
     cellSizeM: 5,
@@ -110,7 +157,7 @@ export const defaultConfig: SimConfig = {
     losSampleM: 1,
   },
   fleet: {
-    droneCount: 1,
+    droneCount: 16,
     missionPayloadKg: 1.5,
   },
 };

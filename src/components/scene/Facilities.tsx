@@ -3,6 +3,8 @@
 import { Line } from '@react-three/drei';
 import { useMemo } from 'react';
 import * as THREE from 'three';
+import { defaultMap } from '@/sim/map/defaultMap';
+import { dockLaunchPads, dockParking, stationPads } from '@/sim/map/pads';
 import type { Dock, NoFlyZone, Station, Store } from '@/sim/types';
 import { type ThreeTuple, enuToThree, vecToThree } from '../coords';
 import { palette } from './palette';
@@ -31,11 +33,27 @@ function Pad({ position, color, radius }: { position: ThreeTuple; color: string;
   );
 }
 
+/** 도크: 옥상 양 끝 이착륙 패드 + 가운데 격납고(대기 칸) */
 export function Docks({ docks }: { docks: Dock[] }) {
   return (
     <>
       {docks.map((d) => (
-        <Pad key={d.id} position={vecToThree(d.position)} color={palette.dock} radius={5} />
+        <group key={d.id}>
+          {dockLaunchPads(defaultMap, d).map((p, i) => (
+            <Pad key={i} position={vecToThree(p)} color={palette.dock} radius={5} />
+          ))}
+          {/* 격납고 바닥 */}
+          <mesh position={vecToThree({ ...d.position, z: d.position.z + 0.15 })} receiveShadow>
+            <boxGeometry args={[17, 0.3, 17]} />
+            <meshStandardMaterial color="#475569" />
+          </mesh>
+          {dockParking(defaultMap, d).map((p, i) => (
+            <mesh key={i} position={vecToThree({ ...p, z: p.z + 0.32 })} rotation={[-Math.PI / 2, 0, 0]}>
+              <ringGeometry args={[1.6, 1.9, 20]} />
+              <meshBasicMaterial color="#cbd5e1" />
+            </mesh>
+          ))}
+        </group>
       ))}
     </>
   );
@@ -45,7 +63,11 @@ export function Stations({ stations }: { stations: Station[] }) {
   return (
     <>
       {stations.map((s) => (
-        <Pad key={s.id} position={vecToThree(s.position)} color={palette.station} radius={6} />
+        <group key={s.id}>
+          {stationPads(s).map((p, i) => (
+            <Pad key={i} position={vecToThree(p)} color={palette.station} radius={6} />
+          ))}
+        </group>
       ))}
     </>
   );

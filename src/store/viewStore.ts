@@ -21,12 +21,15 @@ interface ViewState {
   focusRequest: { x: number; y: number; n: number } | null;
   /** 카메라가 따라갈 드론 id */
   followDroneId: string | null;
+  /** 패널에서 선택한 드론 (경로 상세 표시) */
+  selectedDroneId: string | null;
   setViewMode: (m: ViewMode) => void;
   toggleLabels: () => void;
   toggleRawPath: () => void;
   setCamera: (c: CameraInfo) => void;
   requestFocus: (x: number, y: number) => void;
   setFollow: (id: string | null) => void;
+  setSelected: (id: string | null) => void;
 }
 
 export const useViewStore = create<ViewState>((set) => ({
@@ -36,11 +39,13 @@ export const useViewStore = create<ViewState>((set) => ({
   camera: { x: 0, y: 0, targetX: 0, targetY: 0 },
   focusRequest: null,
   followDroneId: null,
+  selectedDroneId: null,
   setViewMode: (viewMode) => set({ viewMode }),
   toggleLabels: () => set((s) => ({ showLabels: !s.showLabels })),
   toggleRawPath: () => set((s) => ({ showRawPath: !s.showRawPath })),
   setCamera: (camera) => set({ camera }),
   // 다른 곳으로 이동하면 따라가기를 끈다
   requestFocus: (x, y) => set((s) => ({ focusRequest: { x, y, n: (s.focusRequest?.n ?? 0) + 1 }, followDroneId: null })),
-  setFollow: (followDroneId) => set({ followDroneId }),
+  setFollow: (followDroneId) => set((s) => ({ followDroneId, selectedDroneId: followDroneId ?? s.selectedDroneId })),
+  setSelected: (selectedDroneId) => set({ selectedDroneId }),
 }));

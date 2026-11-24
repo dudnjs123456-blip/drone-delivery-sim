@@ -1,7 +1,7 @@
 'use client';
 
 import { useFrame } from '@react-three/fiber';
-import { useRef, useState } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import * as THREE from 'three';
 import { engine, runner, useSimStore } from '@/store/simStore';
 import type { Vec3 } from '@/sim/types';
@@ -13,135 +13,152 @@ export const DRONE_RENDER_SCALE = 6;
 const ROTOR_SPIN_RAD_S = 60;
 const LABEL_OFFSET_M = 9;
 
-interface DroneParts {
-  root: THREE.Group;
-  rotors: THREE.Object3D[];
-  led: THREE.MeshStandardMaterial;
-}
-
+/**
+ * 드론 모델을 부품별 InstancedMesh 로 그린다.
+ * 드론마다 메시를 만들면 드론 수 × 부품 수(16개)만큼 draw call 이 생기는데,
+ * 인스턴싱하면 드론 수와 관계없이 부품 종류 수(7개)만큼만 그린다.
+ * 기준 자세: 앞쪽 = -Z (북쪽), 위 = +Y.
+ */
 const ARM_ANGLES = [Math.PI / 4, (3 * Math.PI) / 4, (5 * Math.PI) / 4, (7 * Math.PI) / 4];
+const ROTOR_POS = ARM_ANGLES.map((a) => new THREE.Vector3(Math.cos(a) * 0.55, 0.22, Math.sin(a) * 0.55));
 
-function DroneModel({ id, registry }: { id: string; registry: Map<string, DroneParts> }) {
-  const parts = useRef<Partial<DroneParts>>({ rotors: [] });
-  const tryRegister = () => {
-    const p = parts.current;
-    if (p.root && p.led && p.rotors?.length === 4) registry.set(id, p as DroneParts);
-  };
-
-  return (
-    <group
-      ref={(g) => {
-        if (!g) return;
-        parts.current.root = g;
-        tryRegister();
-        return () => {
-          registry.delete(id);
-        };
-      }}
-      scale={DRONE_RENDER_SCALE}
-    >
-      {/* 몸체 (앞쪽 = -Z = 북쪽이 기준 자세) */}
-      <mesh castShadow position={[0, 0.15, 0]}>
-        <boxGeometry args={[0.45, 0.18, 0.6]} />
-        <meshStandardMaterial color="#1e293b" />
-      </mesh>
-      {/* 앞쪽 표시 */}
-      <mesh position={[0, 0.2, -0.32]}>
-        <boxGeometry args={[0.2, 0.06, 0.06]} />
-        <meshStandardMaterial color="#f8fafc" />
-      </mesh>
-      {/* 상태 LED */}
-      <mesh position={[0, 0.27, 0]}>
-        <sphereGeometry args={[0.09, 12, 12]} />
-        <meshStandardMaterial
-          ref={(m) => {
-            if (m) {
-              parts.current.led = m;
-              tryRegister();
-            }
-          }}
-          color="#64748b"
-          emissive="#64748b"
-          emissiveIntensity={2}
-        />
-      </mesh>
-      {/* 화물 */}
-      <mesh position={[0, -0.05, 0]} castShadow>
-        <boxGeometry args={[0.28, 0.2, 0.28]} />
-        <meshStandardMaterial color="#d97706" />
-      </mesh>
-      {ARM_ANGLES.map((a, i) => {
-        const x = Math.cos(a) * 0.55;
-        const z = Math.sin(a) * 0.55;
-        return (
-          <group key={i}>
-            <mesh position={[x / 2, 0.15, z / 2]} rotation={[0, -a, 0]}>
-              <boxGeometry args={[0.55, 0.04, 0.05]} />
-              <meshStandardMaterial color="#334155" />
-            </mesh>
-            <group
-              position={[x, 0.22, z]}
-              ref={(g) => {
-                if (g) {
-                  parts.current.rotors![i] = g;
-                  tryRegister();
-                }
-              }}
-            >
-              <mesh>
-                <boxGeometry args={[0.5, 0.01, 0.05]} />
-                <meshStandardMaterial color="#e2e8f0" />
-              </mesh>
-              <mesh rotation={[-Math.PI / 2, 0, 0]}>
-                <ringGeometry args={[0.24, 0.27, 24]} />
-                <meshBasicMaterial color="#94a3b8" side={THREE.DoubleSide} transparent opacity={0.6} />
-              </mesh>
-            </group>
-          </group>
-        );
-      })}
-    </group>
-  );
+interface PartSpec {
+  key: string;
+  geometry: THREE.BufferGeometry;
+  material: THREE.Material;
+  /** 드론 좌표계 기준 부품 변환 (드론 하나에 여러 개일 수 있다) */
+  locals: THREE.Matrix4[];
+  castShadow?: boolean;
+  /** 회전하는 로터 날개 */
+  spin?: boolean;
+  /** 비행 단계 색 (instanceColor) */
+  phaseColored?: boolean;
 }
 
-/** 드론 목록은 10Hz UI 상태로, 위치·자세는 매 프레임 엔진 스냅샷에서 직접 갱신한다 */
+const T = (x: number, y: number, z: number) => new THREE.Matrix4().makeTranslation(x, y, z);
+
+function makeParts(): PartSpec[] {
+  const std = (color: string) => new THREE.MeshStandardMaterial({ color });
+  return [
+    { key: 'body', geometry: new THREE.BoxGeometry(0.45, 0.18, 0.6), material: std('#1e293b'), locals: [T(0, 0.15, 0)], castShadow: true },
+    { key: 'nose', geometry: new THREE.BoxGeometry(0.2, 0.06, 0.06), material: std('#f8fafc'), locals: [T(0, 0.2, -0.32)] },
+    { key: 'cargo', geometry: new THREE.BoxGeometry(0.28, 0.2, 0.28), material: std('#d97706'), locals: [T(0, -0.05, 0)], castShadow: true },
+    {
+      key: 'arm',
+      geometry: new THREE.BoxGeometry(0.55, 0.04, 0.05),
+      material: std('#334155'),
+      locals: ARM_ANGLES.map((a) =>
+        T(Math.cos(a) * 0.275, 0.15, Math.sin(a) * 0.275).multiply(new THREE.Matrix4().makeRotationY(-a)),
+      ),
+    },
+    {
+      key: 'ring',
+      geometry: new THREE.RingGeometry(0.24, 0.27, 24).rotateX(-Math.PI / 2),
+      material: new THREE.MeshBasicMaterial({ color: '#94a3b8', side: THREE.DoubleSide, transparent: true, opacity: 0.6 }),
+      locals: ROTOR_POS.map((p) => T(p.x, p.y, p.z)),
+    },
+    {
+      key: 'blade',
+      geometry: new THREE.BoxGeometry(0.5, 0.01, 0.05),
+      material: std('#e2e8f0'),
+      locals: ROTOR_POS.map((p) => T(p.x, p.y, p.z)),
+      spin: true,
+    },
+    {
+      key: 'led',
+      geometry: new THREE.SphereGeometry(0.09, 12, 12),
+      // 색은 instanceColor 로 준다 (material.color 와 곱해지므로 흰색)
+      material: new THREE.MeshStandardMaterial({ color: '#ffffff', emissive: '#ffffff', emissiveIntensity: 0.6 }),
+      locals: [T(0, 0.27, 0)],
+      phaseColored: true,
+    },
+  ];
+}
+
 export function Drones() {
-  const idsKey = useSimStore((s) => s.drones.map((d) => d.id).join(','));
-  const ids = idsKey ? idsKey.split(',') : [];
-  // 렌더 중 ref.current 를 읽지 않도록 한 번 만든 객체를 state 로 보관한다
-  const [registry] = useState(() => new Map<string, DroneParts>());
-  const [tmp] = useState<Vec3>(() => ({ x: 0, y: 0, z: 0 }));
-  const [color] = useState(() => new THREE.Color());
+  const count = useSimStore((s) => s.drones.length);
+  const parts = useMemo(() => makeParts(), []);
+  const meshes = useRef<(THREE.InstancedMesh | null)[]>([]);
+  // 매 프레임 바뀌는 값과 재사용 버퍼는 ref 에 둔다 (useFrame 안에서만 읽고 쓴다)
+  const frame = useRef({
+    spin: new Float32Array(256),
+    p: { x: 0, y: 0, z: 0 } as Vec3,
+    m: new THREE.Matrix4(),
+    w: new THREE.Matrix4(),
+    s: new THREE.Matrix4(),
+    q: new THREE.Quaternion(),
+    e: new THREE.Euler(0, 0, 0, 'YXZ'),
+    pos: new THREE.Vector3(),
+    scl: new THREE.Vector3(DRONE_RENDER_SCALE, DRONE_RENDER_SCALE, DRONE_RENDER_SCALE),
+    c: new THREE.Color(),
+  });
+
+  // 부품 지오메트리·재질 정리
+  useEffect(
+    () => () => {
+      for (const p of parts) {
+        p.geometry.dispose();
+        p.material.dispose();
+      }
+    },
+    [parts],
+  );
 
   useFrame((_, delta) => {
-    for (const d of engine.getSnapshot().drones) {
-      const parts = registry.get(d.id);
-      if (!parts) continue;
-      const p = runner.interpolatedPosition(d, tmp);
-      parts.root.position.set(p.x, p.z, -p.y);
-      // 방위(yaw)를 먼저, 기울기(pitch)는 기체 기준으로 적용
-      parts.root.rotation.order = 'YXZ';
-      parts.root.rotation.y = -d.headingRad;
-      // 진행 방향으로 살짝 기울인다 (시각 효과)
+    const tmp = frame.current;
+    const spin = tmp.spin;
+    const drones = engine.getSnapshot().drones;
+    const n = Math.min(drones.length, count);
+    for (let i = 0; i < n; i++) {
+      const d = drones[i];
+      const p = runner.interpolatedPosition(d, tmp.p);
       const hs = Math.hypot(d.velocity.x, d.velocity.y);
-      parts.root.rotation.x = -Math.min(0.25, hs * 0.02);
+      // 방위(yaw)를 먼저, 진행 방향 기울기(pitch)는 기체 기준
+      tmp.e.set(-Math.min(0.25, hs * 0.02), -d.headingRad, 0, 'YXZ');
+      tmp.q.setFromEuler(tmp.e);
+      tmp.pos.set(p.x, p.z, -p.y);
+      tmp.w.compose(tmp.pos, tmp.q, tmp.scl);
 
       const airborne = isAirborne(d.phase);
-      const spin = airborne ? ROTOR_SPIN_RAD_S * delta * Math.min(runner.speed, 3) : 0;
-      if (!runner.paused) for (const r of parts.rotors) r.rotation.y += spin;
+      if (airborne && !runner.paused) spin[i] += ROTOR_SPIN_RAD_S * delta * Math.min(runner.speed, 3);
 
-      color.set(phaseColor[d.phase]);
-      parts.led.color.copy(color);
-      parts.led.emissive.copy(color);
-
+      for (let k = 0; k < parts.length; k++) {
+        const part = parts[k];
+        const mesh = meshes.current[k];
+        if (!mesh) continue;
+        for (let j = 0; j < part.locals.length; j++) {
+          tmp.m.multiplyMatrices(tmp.w, part.locals[j]);
+          if (part.spin) tmp.m.multiply(tmp.s.makeRotationY(spin[i] + j));
+          mesh.setMatrixAt(i * part.locals.length + j, tmp.m);
+        }
+        if (part.phaseColored) mesh.setColorAt(i, tmp.c.set(phaseColor[d.phase]));
+      }
       setLabelAnchor(`drone:${d.id}`, p.x, p.z + LABEL_OFFSET_M, -p.y);
+    }
+    for (let k = 0; k < parts.length; k++) {
+      const mesh = meshes.current[k];
+      if (!mesh) continue;
+      mesh.count = n * parts[k].locals.length;
+      mesh.instanceMatrix.needsUpdate = true;
+      if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
     }
   });
 
+  if (count === 0) return null;
   return (
     <>
-      {ids.map((id) => (
-        <DroneModel key={id} id={id} registry={registry} />
+      {parts.map((part, k) => (
+        <instancedMesh
+          // 드론 수가 바뀌면 버퍼 크기가 달라지므로 새로 만든다
+          key={`${part.key}-${count}`}
+          ref={(m) => {
+            meshes.current[k] = m;
+          }}
+          args={[part.geometry, part.material, count * part.locals.length]}
+          castShadow={part.castShadow}
+          // 인스턴스가 단지 전체에 흩어져 있어 기본 경계구로는 잘못 잘린다
+          frustumCulled={false}
+        />
       ))}
     </>
   );

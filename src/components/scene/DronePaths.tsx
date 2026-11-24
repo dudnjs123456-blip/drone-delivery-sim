@@ -2,6 +2,7 @@
 
 import { Line } from '@react-three/drei';
 import { useMemo } from 'react';
+import { defaultConfig } from '@/sim/config';
 import type { Vec3 } from '@/sim/types';
 import { useSimStore } from '@/store/simStore';
 import { useViewStore } from '@/store/viewStore';
@@ -64,11 +65,42 @@ function ConflictMarkers({ path }: { path: readonly Vec3[] }) {
   );
 }
 
+/** 이격 거리 위반: 두 드론을 잇는 빨간 선 + 보호 구역 구 */
+function SeparationAlerts() {
+  const alerts = useSimStore((s) => s.alerts);
+  const drones = useSimStore((s) => s.drones);
+  const byId = useMemo(() => new Map(drones.map((d) => [d.id, d])), [drones]);
+  const r = defaultConfig.traffic.minSeparationM / 2;
+  return (
+    <>
+      {alerts.map((a) => {
+        if (a.type !== 'SEPARATION_VIOLATION') return null;
+        const p = byId.get(a.droneIds[0]);
+        const q = byId.get(a.droneIds[1]);
+        if (!p || !q) return null;
+        return (
+          <group key={a.droneIds.join('|')}>
+            <Line points={[vecToThree(p.position), vecToThree(q.position)]} color="#dc2626" lineWidth={4} />
+            {[p, q].map((d) => (
+              <mesh key={d.id} position={vecToThree(d.position)}>
+                <sphereGeometry args={[r, 20, 20]} />
+                <meshBasicMaterial color="#ef4444" transparent opacity={0.18} depthWrite={false} />
+              </mesh>
+            ))}
+          </group>
+        );
+      })}
+    </>
+  );
+}
+
 export function DronePaths() {
   const drones = useSimStore((s) => s.drones);
   const preview = useSimStore((s) => s.preview);
+  const queued = useSimStore((s) => s.traffic.queuedOrders);
   const showRawPath = useViewStore((s) => s.showRawPath);
-  const anyIdle = drones.some((d) => d.phase === 'IDLE');
+  const selectedId = useViewStore((s) => s.selectedDroneId);
+  const anyBusy = drones.some((d) => d.phase !== 'IDLE' || d.departAt !== null);
 
   return (
     <>
@@ -76,12 +108,13 @@ export function DronePaths() {
         .filter((d) => d.path.length >= 2)
         .map((d) => {
           const returning = d.phase === 'RETURN';
-          const color = returning ? '#475569' : '#0284c7';
+          const selected = d.id === selectedId;
+          const color = selected ? '#f59e0b' : returning ? '#475569' : '#0284c7';
           return (
             <group key={d.id}>
-              <PathLine path={d.path} color={color} dashed={returning} />
-              <Waypoints path={d.path} color={color} />
-              {showRawPath && d.route && d.route.rawPath.length > 2 && (
+              <PathLine path={d.path} color={color} dashed={returning} width={selected ? 3.5 : 2} opacity={selected ? 1 : 0.75} />
+              {selected && <Waypoints path={d.path} color={color} />}
+              {selected && showRawPath && d.route && d.route.rawPath.length > 2 && (
                 <PathLine path={d.route.rawPath} color="#a855f7" width={1.2} opacity={0.7} />
               )}
               <ConflictMarkers path={d.path} />
@@ -89,8 +122,10 @@ export function DronePaths() {
           );
         })}
 
-      {/* 출발 전 미리보기: 대기 중인 드론이 있을 때만 */}
-      {anyIdle && preview?.result.ok && (
+      <SeparationAlerts />
+
+      {/* 출발 전 미리보기: 운항이 없을 때만 (혼잡할 때 화면을 가리지 않도록) */}
+      {!anyBusy && queued === 0 && preview?.result.ok && (
         <group>
           <PathLine path={preview.fullPath} color="#f97316" width={2} dashed opacity={0.9} />
           <Waypoints path={preview.fullPath} color="#f97316" />
