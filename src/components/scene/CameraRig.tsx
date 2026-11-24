@@ -135,6 +135,16 @@ export function CameraRig({ map }: { map: MapData }) {
     if (!c || !focusRequest || useViewStore.getState().viewMode === 'FPV') return;
     const target = new THREE.Vector3(...enuToThree(focusRequest.x, focusRequest.y, 0));
     const offset = camera.position.clone().sub(c.target);
+    if (focusRequest.from) {
+      // ENU 방향 (x=동, y=북) → Three (x, ·, -y)
+      offset.set(focusRequest.from.x, 0.6, -focusRequest.from.y);
+    }
+    if (focusRequest.dist) {
+      // 방향은 유지하고 거리만 줄인다 (너무 눕지 않게 높이는 거리의 절반 이상)
+      offset.setLength(focusRequest.dist);
+      offset.y = Math.max(offset.y, focusRequest.dist * 0.5);
+      offset.setLength(focusRequest.dist);
+    }
     anim.current = { position: target.clone().add(offset), target };
   }, [focusRequest, camera]);
 

@@ -133,6 +133,7 @@ export function Drones() {
         if (!mesh) continue;
         for (let j = 0; j < part.locals.length; j++) {
           tmp.m.multiplyMatrices(tmp.w, part.locals[j]);
+          if (part.key === 'cargo' && d.payloadKg <= 0) tmp.m.makeScale(0, 0, 0);
           if (part.spin) tmp.m.multiply(tmp.s.makeRotationY(spin[i] + j));
           mesh.setMatrixAt(i * part.locals.length + j, tmp.m);
         }

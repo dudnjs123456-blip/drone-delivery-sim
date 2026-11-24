@@ -232,6 +232,7 @@ describe('스테이션 폐쇄', () => {
   it('폐쇄 중 새 주문은 전환 정책이면 열린 스테이션으로 배정된다', () => {
     const e = new LocalSimEngine();
     e.load(defaultMap, defaultConfig, 1);
+    e.dispatch({ type: 'SET_FIRST_MILE_SCALE', scale: 0 });
     e.dispatch({ type: 'INJECT_HAZARD', spec: { kind: 'STATION_CLOSED', stationId: 'station-s', durationSec: 600 } });
     e.step(DT);
     e.dispatch({ type: 'CREATE_ORDER', storeId: 'store-cafe', destBuildingId: 'apt-109' });

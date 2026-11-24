@@ -145,9 +145,17 @@ export interface RouteInfo {
 
 // ── 주문 ──
 export type OrderStatus =
+  /** 주방 대기 (화구가 비기를 기다림) */
+  | 'KITCHEN_QUEUE'
   | 'COOKING'
+  /** 포장 대기·포장 중 */
+  | 'PACKING'
+  /** 포장 완료, 직원이 나르기를 기다림 */
+  | 'READY'
   | 'TO_DOCK'
   | 'WAITING_DRONE'
+  /** 드론 패드에서 화물 적재 중 */
+  | 'LOADING'
   | 'IN_FLIGHT'
   | 'AT_STATION'
   | 'LAST_MILE'
@@ -171,10 +179,16 @@ export interface Order {
   /** 각 시점의 시뮬레이션 시각(s). 구간 시간은 이 값들의 차이로 계산한다 */
   t: {
     created: number;
+    cookStart?: number;
+    cookDone?: number;
+    packStart?: number;
+    packDone?: number;
+    /** 직원이 들고 출발 */
+    pickedUp?: number;
+    atDock?: number;
     /** 드론·예약이 확정된 시각 */
     assigned?: number;
-    cookDone?: number;
-    atDock?: number;
+    loadStart?: number;
     takeoff?: number;
     landed?: number;
     courierPickup?: number;

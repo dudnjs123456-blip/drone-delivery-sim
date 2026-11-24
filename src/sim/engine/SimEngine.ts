@@ -5,6 +5,7 @@
  */
 import type { SimConfig } from '../config';
 import type { HazardLogEntry, HazardSettings, HazardSpec, HazardState, ResponsePolicies, SafetyStats } from '../hazards/types';
+import type { KitchenState, RunnerState } from '../orders/firstMile';
 import type { Drone, FlightPhase, MapData, Order, WindState } from '../types';
 
 export type SimCommand =
@@ -20,7 +21,9 @@ export type SimCommand =
   /** 예약된 돌발 상황은 취소, 진행 중이면 종료 */
   | { type: 'CANCEL_HAZARD'; hazardId: string }
   | { type: 'SET_POLICIES'; policies: Partial<ResponsePolicies> }
-  | { type: 'SET_HAZARD_SETTINGS'; settings: Partial<HazardSettings> };
+  | { type: 'SET_HAZARD_SETTINGS'; settings: Partial<HazardSettings> }
+  /** 조리·포장·운반 시간 배율 (1 = 실제, 0 = 즉시) */
+  | { type: 'SET_FIRST_MILE_SCALE'; scale: number };
 
 export type DispatchResult =
   | { ok: true; droneId?: string; orderId?: string; hazardId?: string }
@@ -76,6 +79,11 @@ export interface SimSnapshot {
   safety: SafetyStats;
   policies: ResponsePolicies;
   hazardSettings: HazardSettings;
+  /** 가게 주방 상태 (퍼스트 마일) */
+  kitchens: readonly KitchenState[];
+  /** 가게 → 도크 운반 직원 */
+  runners: readonly RunnerState[];
+  firstMileScale: number;
 }
 
 export interface SimEngine {

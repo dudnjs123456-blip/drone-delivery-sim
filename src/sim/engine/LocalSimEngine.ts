@@ -42,6 +42,7 @@ import {
   emptySafety,
 } from '../hazards/types';
 import { dockLaunchPads, dockParking, stationPads } from '../map/pads';
+import { type KitchenState, type RunnerState, kitchenProfile } from '../orders/firstMile';
 import { distanceToPolygon } from '../pathfinding/obstacles';
 import { type PlanResult, PathPlanner } from '../pathfinding/planner';
 import { type MissionPrediction, predictMission, predictRemaining } from '../traffic/predict';
@@ -99,6 +100,10 @@ interface Mission {
   hold: Hold | null;
   /** 비상착륙 중이면 착륙할 패드 (홈 도크 패드가 아니면 착륙 후 FAILED) */
   emergencyPad: Vec3 | null;
+  /** 패드에서 화물 적재를 시작하는 스텝 (= 출발 스텝 - 적재 시간) */
+  loadStartStep: number;
+  loading: boolean;
+  payloadKg: number;
 }
 
 interface DroneRuntime {
@@ -194,6 +199,12 @@ export class LocalSimEngine implements SimEngine {
   /** stationId → 폐쇄 hazardId */
   private closedStations = new Map<string, string>();
 
+  // 퍼스트 마일
+  private kitchens: KitchenState[] = [];
+  private kitchenByStore = new Map<string, KitchenState>();
+  private runners: RunnerState[] = [];
+  private firstMileScale: number | undefined;
+
   private listeners = new Set<(e: SimEvent) => void>();
   private snapshot!: SimSnapshot;
 
@@ -252,6 +263,17 @@ export class LocalSimEngine implements SimEngine {
       linkLossHoldSec: hz.linkLossHoldSec,
     };
 
+    this.firstMileScale ??= config.kitchen.timeScale;
+    this.kitchens = map.stores.map((st) => ({ storeId: st.id, dockId: st.dockId, queue: [], cooking: [], packQueue: [], packing: [], ready: [] }));
+    this.kitchenByStore = new Map(this.kitchens.map((k) => [k.storeId, k]));
+    this.runners = [];
+    for (const st of map.stores) {
+      const n = kitchenProfile(config, st.id).runners;
+      for (let i = 0; i < n; i++) {
+        this.runners.push({ id: `${st.id}#${i + 1}`, storeId: st.id, dockId: st.dockId, phase: 'IDLE', orderIds: [], startStep: 0, endStep: 0 });
+      }
+    }
+
     if (map.docks.length === 0) throw new Error('도크가 없는 지도에서는 드론을 배치할 수 없습니다');
     const slotsByDock = new Map(map.docks.map((d) => [d.id, dockParking(map, d)]));
     const used = new Map<string, number>();
@@ -300,6 +322,9 @@ export class LocalSimEngine implements SimEngine {
       safety: this.safety,
       policies: this.policies,
       hazardSettings: this.hazardSettings,
+      kitchens: this.kitchens,
+      runners: this.runners,
+      firstMileScale: this.firstMileScale,
     };
   }
 
@@ -320,6 +345,7 @@ export class LocalSimEngine implements SimEngine {
     s.peakOrdersPerMin = this.peak?.perMin ?? null;
     s.policies = this.policies;
     s.hazardSettings = this.hazardSettings;
+    s.firstMileScale = this.firstMileScale!;
     return s;
   }
 
@@ -353,6 +379,9 @@ export class LocalSimEngine implements SimEngine {
       case 'SET_POLICIES':
         this.policies = { ...this.policies, ...cmd.policies };
         return { ok: true };
+      case 'SET_FIRST_MILE_SCALE':
+        this.firstMileScale = Math.max(0, cmd.scale);
+        return { ok: true };
       case 'SET_HAZARD_SETTINGS':
         this.hazardSettings = { ...this.hazardSettings, ...cmd.settings };
         return { ok: true };
@@ -367,6 +396,7 @@ export class LocalSimEngine implements SimEngine {
     const step = this.stepCount;
 
     this.processHazardTimeline();
+    this.processKitchens(step);
 
     if (this.peak && step >= this.peak.nextStep) {
       this.createOrder();
@@ -406,12 +436,13 @@ export class LocalSimEngine implements SimEngine {
       if (!rt.mission) return;
     }
 
-    // 출발 스텝: 격납고에서 이착륙 패드로 옮긴다 (예측도 패드에서 시작한다)
-    if (m.progress.stage === 'SCHEDULED' && step >= m.legs.departStep) d.position = clone(m.dockPad);
+    // 적재 시작: 격납고에서 이착륙 패드로 옮겨 화물을 싣는다 (지상이므로 공역 예약은 없다)
+    if (m.progress.stage === 'SCHEDULED' && !m.loading && step >= m.loadStartStep) this.startLoading(rt);
     const ev = stepMission(m.legs, m.progress, d, step, this.limits, dt);
     const pr = m.progress;
     switch (ev) {
       case 'DEPART': {
+        if (!m.loading) this.startLoading(rt);
         d.departAt = null;
         d.path = m.outPath;
         d.route = m.outRoute;
@@ -1157,6 +1188,8 @@ export class LocalSimEngine implements SimEngine {
     d.cruiseAltM = null;
     d.path = [];
     d.route = null;
+    // 적재 중이었다면 패드에서 격납고로 돌아간다
+    d.position = clone(rt.slot);
     this.log('info', `${d.id} 출발 취소 (${why}) — 주문 재배정`, undefined, d.id);
   }
 
@@ -1229,14 +1262,14 @@ export class LocalSimEngine implements SimEngine {
       destBuildingId: dest.id,
       weightKg: Math.round(this.rng.range(weightMinKg, weightMaxKg) * 10) / 10,
       mode: 'DRONE',
-      status: 'WAITING_DRONE',
+      status: 'KITCHEN_QUEUE',
       droneId: null,
-      // 조리·도크 이동 시간은 M6 에서 모델링. 지금은 주문 즉시 도크에 도착한 것으로 처리
-      t: { created: this.time, cookDone: this.time, atDock: this.time },
+      t: { created: this.time },
     };
     this.orders.push(order);
     this.ordersById.set(id, order);
-    this.queue.push(id);
+    // 주방 → 포장 → 직원 운반을 거쳐 도크에 도착하면 드론 배정 대기열에 들어간다
+    this.kitchenByStore.get(store.id)!.queue.push(id);
     return { ok: true, orderId: id };
   }
 
@@ -1286,6 +1319,92 @@ export class LocalSimEngine implements SimEngine {
     this.queue = remaining;
   }
 
+  // ── 퍼스트 마일: 주방·포장·운반 ──
+
+  private fmSteps(sec: number): number {
+    return Math.max(1, Math.round((sec * this.firstMileScale!) / this.dt));
+  }
+
+  private processKitchens(step: number) {
+    for (const k of this.kitchens) {
+      const prof = kitchenProfile(this.config, k.storeId);
+      // 조리 완료 → 포장 대기
+      k.cooking = k.cooking.filter((job) => {
+        if (step < job.doneStep) return true;
+        const o = this.ordersById.get(job.orderId)!;
+        o.status = 'PACKING';
+        o.t.cookDone = this.time;
+        k.packQueue.push(job.orderId);
+        return false;
+      });
+      // 화구가 비면 다음 주문 조리 시작
+      while (k.cooking.length < prof.maxCooking && k.queue.length) {
+        const id = k.queue.shift()!;
+        const o = this.ordersById.get(id)!;
+        o.status = 'COOKING';
+        o.t.cookStart = this.time;
+        k.cooking.push({ orderId: id, startStep: step, doneStep: step + this.fmSteps(this.rng.range(prof.cookMinSec, prof.cookMaxSec)) });
+      }
+      // 포장 완료 → 운반 대기
+      k.packing = k.packing.filter((job) => {
+        if (step < job.doneStep) return true;
+        const o = this.ordersById.get(job.orderId)!;
+        o.status = 'READY';
+        o.t.packDone = this.time;
+        k.ready.push(job.orderId);
+        return false;
+      });
+      while (k.packing.length < prof.packers && k.packQueue.length) {
+        const id = k.packQueue.shift()!;
+        this.ordersById.get(id)!.t.packStart = this.time;
+        k.packing.push({ orderId: id, startStep: step, doneStep: step + this.fmSteps(this.rng.range(prof.packMinSec, prof.packMaxSec)) });
+      }
+    }
+
+    for (const r of this.runners) {
+      const k = this.kitchenByStore.get(r.storeId)!;
+      const walk = this.map.stores.find((x) => x.id === r.storeId)!.walkToDockSec;
+      if (r.phase === 'IDLE' && k.ready.length) {
+        r.orderIds = k.ready.splice(0, kitchenProfile(this.config, r.storeId).runnerCapacity);
+        r.phase = 'TO_DOCK';
+        r.startStep = step;
+        r.endStep = step + this.fmSteps(walk);
+        for (const id of r.orderIds) {
+          const o = this.ordersById.get(id)!;
+          o.status = 'TO_DOCK';
+          o.t.pickedUp = this.time;
+        }
+      } else if (r.phase === 'TO_DOCK' && step >= r.endStep) {
+        // 도크 선반에 내려놓고 배정 대기열로
+        for (const id of r.orderIds) {
+          const o = this.ordersById.get(id)!;
+          o.status = 'WAITING_DRONE';
+          o.t.atDock = this.time;
+          this.queue.push(id);
+        }
+        r.orderIds = [];
+        r.phase = 'BACK';
+        r.startStep = step;
+        r.endStep = step + this.fmSteps(walk);
+      } else if (r.phase === 'BACK' && step >= r.endStep) {
+        r.phase = 'IDLE';
+      }
+    }
+  }
+
+  private startLoading(rt: DroneRuntime) {
+    const m = rt.mission!;
+    const d = rt.drone;
+    m.loading = true;
+    d.position = clone(m.dockPad);
+    d.payloadKg = m.payloadKg;
+    const o = m.orderId ? this.ordersById.get(m.orderId) : undefined;
+    if (o) {
+      o.status = 'LOADING';
+      o.t.loadStart = this.time;
+    }
+  }
+
   private nearestOpenStation(fromId: string): Station | null {
     const from = this.stations.get(fromId)!.position;
     return (
@@ -1325,7 +1444,8 @@ export class LocalSimEngine implements SimEngine {
     const dPads = this.dockPads.get(dockId)!;
     const t = this.config.traffic;
     const dwellSteps = Math.round(this.config.drone.stationDwellSec / this.dt);
-    const baseSlot = Math.floor(this.stepCount / this.stepsPerSlot) + 1;
+    const loadSteps = Math.round(this.config.kitchen.loadSec / this.dt);
+    const baseSlot = Math.floor((this.stepCount + loadSteps) / this.stepsPerSlot) + 1;
     const delaySlots: number[] = [];
     const maxDelay = this.useReservations ? t.maxDepartureDelaySec : 0;
     for (let s = 0; s <= maxDelay + 1e-9; s += t.delayStepSec) delaySlots.push(Math.round(s / t.slotSec));
@@ -1364,12 +1484,13 @@ export class LocalSimEngine implements SimEngine {
             // 도크 패드: 출발 직전 1칸, 복귀 착륙 직후 1칸 동안 비어 있어야 한다
             const dkey = `${dockId}#d${dp}`;
             const done = departStep + c.pred.doneStep;
-            if (this.padKeyOverlaps(dkey, departStep - this.stepsPerSlot, departStep)) continue;
+            const padFrom = departStep - Math.max(loadSteps, this.stepsPerSlot);
+            if (this.padKeyOverlaps(dkey, padFrom, departStep)) continue;
             if (this.padKeyOverlaps(dkey, done, done + this.stepsPerSlot)) continue;
             if (this.useReservations && !this.table.isFree(rt.drone.id, departSlot, c.pred.footprint)) continue;
 
-            this.commit(rt, c, departStep, departSlot, stationId, orderId, payloadKg, from, to, dkey);
-            this.addBusy(dkey, departStep - this.stepsPerSlot, departStep, rt.drone.id);
+            this.commit(rt, c, departStep, departSlot, stationId, orderId, payloadKg, from, to, dkey, departStep - loadSteps);
+            this.addBusy(dkey, padFrom, departStep, rt.drone.id);
             this.addBusy(dkey, done, done + this.stepsPerSlot, rt.drone.id);
             this.trafficDelaySumSec += delay * t.slotSec;
             if (alt[0] !== cruise) this.altitudeShifted++;
@@ -1432,6 +1553,7 @@ export class LocalSimEngine implements SimEngine {
     padFrom: number,
     padTo: number,
     dockPadKey: string,
+    loadStartStep: number,
   ) {
     // 예약 테이블을 꺼도 예약은 기록한다 (다시 켰을 때 새 임무가 기존 비행을 피하도록)
     this.table.reserve(rt.drone.id, departSlot, c.pred.footprint);
@@ -1456,11 +1578,15 @@ export class LocalSimEngine implements SimEngine {
       backAlt: c.backAlt,
       hold: null,
       emergencyPad: null,
+      loadStartStep,
+      loading: false,
+      payloadKg,
     };
     const d = rt.drone;
     d.departAt = departStep * this.dt;
     d.orderId = orderId;
-    d.payloadKg = payloadKg;
+    // 화물은 적재를 시작할 때 싣는다
+    d.payloadKg = 0;
     d.cruiseAltM = c.outAlt;
     d.pathIndex = 0;
     this.missionsScheduled++;

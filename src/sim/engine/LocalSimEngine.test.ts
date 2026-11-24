@@ -20,9 +20,11 @@ function cfgWith(patch: { fleet?: Partial<SimConfig['fleet']>; traffic?: Partial
   };
 }
 
+/** 이 파일의 테스트는 교통·비행을 보므로 가게 공정(조리·포장·운반)은 즉시 처리한다 */
 function makeEngine(cfg: SimConfig = defaultConfig, seed = 1) {
   const e = new LocalSimEngine();
   e.load(defaultMap, cfg, seed);
+  e.dispatch({ type: 'SET_FIRST_MILE_SCALE', scale: 0 });
   return e;
 }
 
@@ -154,7 +156,7 @@ describe('LocalSimEngine: 주문과 다중 드론', () => {
     const r = e.dispatch({ type: 'CREATE_ORDER', storeId: 'store-cafe', destBuildingId: 'apt-101' });
     expect(r.ok).toBe(true);
     const o = e.getSnapshot().orders[0];
-    expect(o.status).toBe('WAITING_DRONE');
+    expect(o.status).toBe('KITCHEN_QUEUE');
     expect(o.stationId).toBe('station-n');
     run(e, 2);
     expect(o.droneId).not.toBeNull();

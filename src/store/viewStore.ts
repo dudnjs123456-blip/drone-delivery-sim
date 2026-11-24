@@ -21,7 +21,7 @@ interface ViewState {
   showRawPath: boolean;
   camera: CameraInfo;
   /** 미니맵 클릭 등으로 요청된 카메라 이동. n 이 바뀔 때마다 한 번 처리한다 */
-  focusRequest: { x: number; y: number; n: number } | null;
+  focusRequest: { x: number; y: number; n: number; dist?: number; from?: { x: number; y: number } } | null;
   /** 카메라가 따라갈 드론 id */
   followDroneId: string | null;
   /** 패널에서 선택한 드론 (경로 상세 표시) */
@@ -35,7 +35,8 @@ interface ViewState {
   toggleLabels: () => void;
   toggleRawPath: () => void;
   setCamera: (c: CameraInfo) => void;
-  requestFocus: (x: number, y: number) => void;
+  /** dist 를 주면 그 거리까지 다가가고, from(ENU 방향)을 주면 그쪽에서 바라본다 */
+  requestFocus: (x: number, y: number, dist?: number, from?: { x: number; y: number }) => void;
   setFollow: (id: string | null) => void;
   setSelected: (id: string | null) => void;
   enterFpv: (droneId: string) => void;
@@ -61,7 +62,7 @@ export const useViewStore = create<ViewState>((set) => ({
   toggleRawPath: () => set((s) => ({ showRawPath: !s.showRawPath })),
   setCamera: (camera) => set({ camera }),
   // 다른 곳으로 이동하면 따라가기를 끈다
-  requestFocus: (x, y) => set((s) => ({ focusRequest: { x, y, n: (s.focusRequest?.n ?? 0) + 1 }, followDroneId: null })),
+  requestFocus: (x, y, dist, from) => set((s) => ({ focusRequest: { x, y, dist, from, n: (s.focusRequest?.n ?? 0) + 1 }, followDroneId: null })),
   setFollow: (followDroneId) => set((s) => ({ followDroneId, selectedDroneId: followDroneId ?? s.selectedDroneId })),
   setSelected: (selectedDroneId) => set({ selectedDroneId }),
   enterFpv: (fpvDroneId) =>

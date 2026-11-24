@@ -3,6 +3,23 @@
  * 단위: 미터(m), 초(s). km/h 는 표시·입력용이며 내부 계산 전에 m/s 로 변환한다.
  */
 
+export interface KitchenProfile {
+  /** 조리 시간 범위 (s) */
+  cookMinSec: number;
+  cookMaxSec: number;
+  /** 동시에 조리할 수 있는 주문 수 (화구·튀김기·오븐 수) */
+  maxCooking: number;
+  /** 포장 시간 범위 (s) */
+  packMinSec: number;
+  packMaxSec: number;
+  /** 동시에 포장하는 인원 */
+  packers: number;
+  /** 도크까지 나르는 직원 수 */
+  runners: number;
+  /** 직원 한 명이 한 번에 나르는 주문 수 */
+  runnerCapacity: number;
+}
+
 export interface SimConfig {
   time: {
     /** 고정 타임스텝 (s) */
@@ -68,6 +85,17 @@ export interface SimConfig {
     /** 출발 지연 후보 간격과 최대값 (s) */
     delayStepSec: number;
     maxDepartureDelaySec: number;
+  };
+  /** 가게 → 도크 (퍼스트 마일): 조리·포장·운반·적재 */
+  kitchen: {
+    /** 조리·포장·운반 시간에 곱하는 배율 (1 = 실제 시간, 0 = 즉시). 화면에서 바꿀 수 있다 */
+    timeScale: number;
+    /** 드론에 화물을 싣는 시간 (s). 배율과 무관 */
+    loadSec: number;
+    /** 가게별 기본값 */
+    defaultProfile: KitchenProfile;
+    /** 가게 id 별 덮어쓰기 */
+    profiles: Record<string, Partial<KitchenProfile>>;
   };
   orders: {
     weightMinKg: number;
@@ -161,6 +189,26 @@ export const defaultConfig: SimConfig = {
     retryAfterSec: 5,
     delayStepSec: 5,
     maxDepartureDelaySec: 180,
+  },
+  kitchen: {
+    timeScale: 1,
+    loadSec: 20,
+    defaultProfile: {
+      cookMinSec: 600,
+      cookMaxSec: 900,
+      maxCooking: 6,
+      packMinSec: 40,
+      packMaxSec: 90,
+      packers: 1,
+      runners: 1,
+      runnerCapacity: 4,
+    },
+    profiles: {
+      'store-chicken': { cookMinSec: 720, cookMaxSec: 1080, maxCooking: 10 },
+      'store-pizza': { cookMinSec: 600, cookMaxSec: 900, maxCooking: 8 },
+      'store-bunsik': { cookMinSec: 300, cookMaxSec: 600, maxCooking: 6 },
+      'store-cafe': { cookMinSec: 120, cookMaxSec: 300, maxCooking: 3, packMinSec: 20, packMaxSec: 40 },
+    },
   },
   orders: {
     weightMinKg: 0.5,

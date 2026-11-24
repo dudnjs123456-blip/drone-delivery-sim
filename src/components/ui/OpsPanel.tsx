@@ -3,16 +3,21 @@
 import { useState } from 'react';
 import { defaultConfig } from '@/sim/config';
 import { defaultMap } from '@/sim/map/defaultMap';
+import { polygonCentroid } from '@/sim/util/geometry';
 import type { OrderStatus } from '@/sim/types';
-import { type DroneView, useSimStore } from '@/store/simStore';
+import { ORDER_SEGMENTS, type DroneView, useSimStore } from '@/store/simStore';
 import { useViewStore } from '@/store/viewStore';
 import { phaseColor, phaseLabel } from '../phase';
 import { DroneCard } from './DronePanel';
 import { HazardPanel } from './HazardPanel';
 
 const orderStatusLabel: Record<OrderStatus, string> = {
+  KITCHEN_QUEUE: '주방 대기',
   COOKING: '조리',
-  TO_DOCK: '도크 이동',
+  PACKING: '포장',
+  READY: '운반 대기',
+  LOADING: '적재',
+  TO_DOCK: '도크로 운반',
   WAITING_DRONE: '드론 대기',
   IN_FLIGHT: '비행',
   AT_STATION: '스테이션',
@@ -92,7 +97,7 @@ function OrdersSection() {
       </div>
       <div className="mt-1 grid grid-cols-2 gap-1">
         <Kpi label="평균 주문→이륙" value={fmtSec(orders.avgWaitSec)} />
-        <Kpi label="평균 주문→착륙" value={fmtSec(orders.avgTotalSec)} />
+        <Kpi label="주방·포장·운반 중" value={String((by.KITCHEN_QUEUE ?? 0) + (by.COOKING ?? 0) + (by.PACKING ?? 0) + (by.READY ?? 0) + (by.TO_DOCK ?? 0))} />
       </div>
       {orders.recent.length > 0 && (
         <table className="mt-1.5 w-full text-[11px]">
@@ -112,8 +117,119 @@ function OrdersSection() {
           </tbody>
         </table>
       )}
-      <p className="mt-1 text-[10px] text-slate-400">조리·도크 이동·문 앞 인계 시간은 M6 에서 모델링 (지금은 0)</p>
+      <SegmentBar />
+      <p className="mt-1 text-[10px] text-slate-400">스테이션 → 문 앞 인계는 M6 에서 모델링</p>
     </Section>
+  );
+}
+
+const SCALES = [
+  { v: 1, l: '실제' },
+  { v: 0.5, l: '½' },
+  { v: 0.2, l: '⅕' },
+  { v: 0.1, l: '1/10' },
+  { v: 0, l: '즉시' },
+];
+
+/** 가게별 주방·포장·운반 현황 */
+function StoresSection() {
+  const kitchens = useSimStore((s) => s.kitchens);
+  const runners = useSimStore((s) => s.runners);
+  const scale = useSimStore((s) => s.firstMileScale);
+  const setScale = useSimStore((s) => s.setFirstMileScale);
+  const shelf = useSimStore((s) => s.orders.shelfByDock);
+  const requestFocus = useViewStore((s) => s.requestFocus);
+
+  return (
+    <Section
+      title="가게 · 주방"
+      right={
+        <div className="flex items-center gap-0.5 text-[10px] text-slate-500">
+          공정 시간
+          {SCALES.map((x) => (
+            <button
+              key={x.v}
+              onClick={() => setScale(x.v)}
+              className={`rounded px-1.5 py-0.5 ${scale === x.v ? 'bg-slate-800 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}
+            >
+              {x.l}
+            </button>
+          ))}
+        </div>
+      }
+    >
+      <table className="w-full text-[11px]">
+        <thead>
+          <tr className="text-[10px] text-slate-400">
+            <th className="text-left font-normal">가게</th>
+            <th className="font-normal">주방 대기</th>
+            <th className="font-normal">조리</th>
+            <th className="font-normal">포장</th>
+            <th className="font-normal">운반</th>
+          </tr>
+        </thead>
+        <tbody>
+          {kitchens.map((k) => {
+            const st = defaultMap.stores.find((s) => s.id === k.storeId)!;
+            const r = runners.filter((x) => x.storeId === k.storeId);
+            const moving = r.find((x) => x.phase === 'TO_DOCK');
+            return (
+              <tr key={k.storeId} className="text-slate-700">
+                <td className="py-0.5">
+                  <button onClick={() => {
+                      // 가게 정면(건물 중심 → 가게 방향)에서 바라본다
+                      const b = defaultMap.buildings.find((x) => x.id === st.buildingId)!;
+                      const [bx, by] = polygonCentroid(b.footprint);
+                      requestFocus(st.position.x, st.position.y, 90, { x: st.position.x - bx, y: st.position.y - by });
+                    }} className="text-left underline decoration-dotted hover:text-sky-700" title="가까이 보기">
+                    {st.name}
+                  </button>
+                </td>
+                <td className={`text-center font-mono ${k.queue > 3 ? 'font-semibold text-red-600' : ''}`}>{k.queue}</td>
+                <td className="text-center font-mono">
+                  {k.cooking.length}/{k.maxCooking}
+                </td>
+                <td className="text-center font-mono">{k.packing + k.ready}</td>
+                <td className="text-center text-[10px]">{moving ? `🧑 ${moving.carrying}개` : r.some((x) => x.phase === 'BACK') ? '복귀 중' : '대기'}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+      <div className="mt-1 flex gap-2 text-[10px] text-slate-500">
+        {defaultMap.docks.map((d) => (
+          <span key={d.id}>
+            📦 {d.name} 선반 <b className="text-slate-700">{shelf[d.id] ?? 0}</b>
+          </span>
+        ))}
+      </div>
+    </Section>
+  );
+}
+
+/** 완료 주문의 구간별 평균 시간 (주문 → 착륙) */
+function SegmentBar() {
+  const seg = useSimStore((s) => s.orders.avgSegments);
+  const total = ORDER_SEGMENTS.reduce((a, x) => a + (seg[x.key] ?? 0), 0);
+  if (!total) return null;
+  return (
+    <div className="mt-1.5">
+      <div className="mb-0.5 text-[10px] text-slate-500">완료 주문 평균 구간 (주문 → 착륙 {fmtSec(total)})</div>
+      <div className="flex h-3 overflow-hidden rounded">
+        {ORDER_SEGMENTS.map((x) => {
+          const v = seg[x.key] ?? 0;
+          return v > 0 ? <div key={x.key} style={{ width: `${(v / total) * 100}%`, background: x.color }} title={`${x.label} ${fmtSec(v)}`} /> : null;
+        })}
+      </div>
+      <div className="mt-0.5 flex flex-wrap gap-x-2 text-[10px] text-slate-600">
+        {ORDER_SEGMENTS.map((x) => (
+          <span key={x.key}>
+            <span className="mr-0.5 inline-block h-2 w-2 rounded-sm" style={{ background: x.color }} />
+            {x.label} {fmtSec(seg[x.key] ?? 0)}
+          </span>
+        ))}
+      </div>
+    </div>
   );
 }
 
@@ -167,6 +283,7 @@ function TrafficSection() {
 function droneStatus(d: DroneView, time: number): string {
   if (d.alert) return d.alert;
   if (d.swapUntil !== null) return '배터리 교체';
+  if (d.departAt !== null && time >= d.departAt - defaultConfig.kitchen.loadSec) return `적재 중 ${Math.max(0, d.departAt - time).toFixed(0)}s`;
   if (d.departAt !== null) return `출발 T-${Math.max(0, d.departAt - time).toFixed(0)}s`;
   return phaseLabel[d.phase];
 }
@@ -232,6 +349,7 @@ export function OpsPanel() {
         {tab === 'ops' ? (
           <>
             <OrdersSection />
+            <StoresSection />
             <TrafficSection />
             <DroneList />
           </>

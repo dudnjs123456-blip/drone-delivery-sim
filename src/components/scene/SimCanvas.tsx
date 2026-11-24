@@ -9,6 +9,7 @@ import { Buildings } from './Buildings';
 import { CameraRig } from './CameraRig';
 import { DronePaths } from './DronePaths';
 import { HazardsLayer } from './HazardsLayer';
+import { StoreActivity } from './StoreActivity';
 import { Drones } from './Drones';
 import { Docks, NoFlyZones, Stations, Stores } from './Facilities';
 import { palette } from './palette';
@@ -76,6 +77,7 @@ export default function SimCanvas() {
       <Drones />
       <DronePaths />
       <HazardsLayer />
+      <StoreActivity />
 
       <LabelProjector />
 

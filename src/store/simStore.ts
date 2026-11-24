@@ -13,6 +13,7 @@ import { defaultMap } from '@/sim/map/defaultMap';
 import { dockLaunchPads, stationPads } from '@/sim/map/pads';
 import { type PlanResult, PathPlanner } from '@/sim/pathfinding/planner';
 import type { HazardLogEntry, HazardSettings, HazardSpec, HazardState, ResponsePolicies, SafetyStats } from '@/sim/hazards/types';
+import { kitchenProfile } from '@/sim/orders/firstMile';
 import type { FlightPhase, Order, OrderStatus, RouteInfo, Vec3 } from '@/sim/types';
 
 export const engine: SimEngine = new LocalSimEngine();
@@ -65,9 +66,48 @@ export interface DroneView {
   linkLostUntil: number | null;
 }
 
+/** 주문 1건의 구간 (완료 주문 평균) */
+export const ORDER_SEGMENTS = [
+  { key: 'kitchenWait', label: '주방 대기', from: 'created', to: 'cookStart', color: '#94a3b8' },
+  { key: 'cook', label: '조리', from: 'cookStart', to: 'cookDone', color: '#f97316' },
+  { key: 'pack', label: '포장', from: 'cookDone', to: 'packDone', color: '#a16207' },
+  { key: 'carryWait', label: '운반 대기', from: 'packDone', to: 'pickedUp', color: '#d6d3d1' },
+  { key: 'carry', label: '도크까지', from: 'pickedUp', to: 'atDock', color: '#db2777' },
+  { key: 'droneWait', label: '드론 대기', from: 'atDock', to: 'loadStart', color: '#64748b' },
+  { key: 'load', label: '적재', from: 'loadStart', to: 'takeoff', color: '#7c3aed' },
+  { key: 'flight', label: '비행', from: 'takeoff', to: 'landed', color: '#0284c7' },
+] as const;
+export type SegmentKey = (typeof ORDER_SEGMENTS)[number]['key'];
+
+export interface KitchenView {
+  storeId: string;
+  dockId: string;
+  queue: number;
+  /** 조리 중 주문별 진행률 0~1 */
+  cooking: number[];
+  maxCooking: number;
+  /** 포장 대기 + 포장 중 */
+  packing: number;
+  ready: number;
+}
+
+export interface RunnerView {
+  id: string;
+  storeId: string;
+  phase: 'IDLE' | 'TO_DOCK' | 'BACK';
+  carrying: number;
+  /** 이동 시작·끝 시각 (s) */
+  start: number;
+  end: number;
+}
+
 export interface OrderSummary {
   total: number;
   byStatus: Partial<Record<OrderStatus, number>>;
+  /** 완료 주문의 구간별 평균 (s) */
+  avgSegments: Partial<Record<SegmentKey, number>>;
+  /** 도크별 적재 선반에서 드론을 기다리는 주문 수 */
+  shelfByDock: Record<string, number>;
   /** 완료 주문 평균: 주문 → 이륙, 주문 → 완료 (s) */
   avgWaitSec: number | null;
   avgTotalSec: number | null;
@@ -89,6 +129,9 @@ interface SimUiState {
   safety: SafetyStats;
   policies: ResponsePolicies;
   hazardSettings: HazardSettings;
+  kitchens: KitchenView[];
+  runners: RunnerView[];
+  firstMileScale: number;
   message: { text: string; ok: boolean } | null;
   selection: { dockId: string; stationId: string };
   preview: RoutePreview | null;
@@ -104,6 +147,7 @@ interface SimUiState {
   cancelHazard: (id: string) => void;
   setPolicies: (p: Partial<ResponsePolicies>) => void;
   setHazardSettings: (s: Partial<HazardSettings>) => void;
+  setFirstMileScale: (scale: number) => void;
   publish: () => void;
 }
 
@@ -131,22 +175,53 @@ function readDrones(): DroneView[] {
 
 const RECENT_ORDERS = 8;
 
+function readKitchens(): KitchenView[] {
+  const snap = engine.getSnapshot();
+  const step = Math.round(snap.time / defaultConfig.time.fixedDtSec);
+  return snap.kitchens.map((k) => ({
+    storeId: k.storeId,
+    dockId: k.dockId,
+    queue: k.queue.length,
+    cooking: k.cooking.map((j) => Math.min(1, (step - j.startStep) / Math.max(1, j.doneStep - j.startStep))),
+    maxCooking: kitchenProfile(defaultConfig, k.storeId).maxCooking,
+    packing: k.packQueue.length + k.packing.length,
+    ready: k.ready.length,
+  }));
+}
+
 function summarizeOrders(orders: readonly Order[]): OrderSummary {
   const byStatus: Partial<Record<OrderStatus, number>> = {};
+  const segSum: Partial<Record<SegmentKey, number>> = {};
+  const shelfByDock: Record<string, number> = {};
   let waitSum = 0;
   let totalSum = 0;
   let done = 0;
   for (const o of orders) {
     byStatus[o.status] = (byStatus[o.status] ?? 0) + 1;
+    if (o.status === 'WAITING_DRONE') {
+      const dock = defaultMap.stores.find((st) => st.id === o.storeId)?.dockId ?? '';
+      shelfByDock[dock] = (shelfByDock[dock] ?? 0) + 1;
+    }
+    if (o.status === 'DELIVERED') {
+      for (const seg of ORDER_SEGMENTS) {
+        const a = o.t[seg.from];
+        const b = o.t[seg.to];
+        if (a !== undefined && b !== undefined) segSum[seg.key] = (segSum[seg.key] ?? 0) + (b - a);
+      }
+    }
     if (o.status === 'DELIVERED' && o.t.takeoff !== undefined && o.t.delivered !== undefined) {
       waitSum += o.t.takeoff - o.t.created;
       totalSum += o.t.delivered - o.t.created;
       done++;
     }
   }
+  const avgSegments: Partial<Record<SegmentKey, number>> = {};
+  if (done) for (const k of Object.keys(segSum) as SegmentKey[]) avgSegments[k] = segSum[k]! / done;
   return {
     total: orders.length,
     byStatus,
+    avgSegments,
+    shelfByDock,
     avgWaitSec: done ? waitSum / done : null,
     avgTotalSec: done ? totalSum / done : null,
     recent: orders.slice(-RECENT_ORDERS).reverse().map((o) => ({ ...o, t: { ...o.t } })),
@@ -168,6 +243,9 @@ export const useSimStore = create<SimUiState>((set, get) => ({
   safety: engine.getSnapshot().safety,
   policies: engine.getSnapshot().policies,
   hazardSettings: engine.getSnapshot().hazardSettings,
+  kitchens: readKitchens(),
+  runners: [],
+  firstMileScale: engine.getSnapshot().firstMileScale,
   message: null,
   selection: { dockId: defaultMap.docks[0].id, stationId: defaultMap.stations[0].id },
   preview: null,
@@ -225,6 +303,10 @@ export const useSimStore = create<SimUiState>((set, get) => ({
     engine.dispatch({ type: 'SET_HAZARD_SETTINGS', settings });
     get().publish();
   },
+  setFirstMileScale: (scale) => {
+    engine.dispatch({ type: 'SET_FIRST_MILE_SCALE', scale });
+    get().publish();
+  },
   publish: () => {
     const snap = engine.getSnapshot();
     const log = snap.phaseLog;
@@ -245,6 +327,16 @@ export const useSimStore = create<SimUiState>((set, get) => ({
       safety: { ...snap.safety },
       policies: snap.policies,
       hazardSettings: snap.hazardSettings,
+      kitchens: readKitchens(),
+      runners: snap.runners.map((r) => ({
+        id: r.id,
+        storeId: r.storeId,
+        phase: r.phase,
+        carrying: r.orderIds.length,
+        start: r.startStep * defaultConfig.time.fixedDtSec,
+        end: r.endStep * defaultConfig.time.fixedDtSec,
+      })),
+      firstMileScale: snap.firstMileScale,
     }));
   },
 }));
