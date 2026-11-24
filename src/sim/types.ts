@@ -89,7 +89,17 @@ export interface NoFlyZone {
  * RETURN: 스테이션 이륙부터 도크 착륙까지의 복귀 비행 전체.
  * 내부적으로 상승·순항·하강 로직을 재사용한다.
  */
-export type FlightPhase = 'IDLE' | 'TAKEOFF' | 'CRUISE' | 'DESCEND' | 'LANDED' | 'RETURN';
+export type FlightPhase =
+  | 'IDLE'
+  | 'TAKEOFF'
+  | 'CRUISE'
+  | 'DESCEND'
+  | 'LANDED'
+  | 'RETURN'
+  /** 돌발 상황 대응으로 공중 대기 (호버링) */
+  | 'HOLD'
+  /** 추락 또는 비상착륙 — 회수 전까지 운용 불가 */
+  | 'FAILED';
 
 export interface Drone {
   id: string;
@@ -114,6 +124,10 @@ export interface Drone {
   swapUntil: number | null;
   /** 이번 비행의 순항 고도 (충돌 회피로 바뀔 수 있다) */
   cruiseAltM: number | null;
+  /** 돌발 상황 표시 (예: 통신두절, 비상착륙 이동 중, 추락) */
+  alert: string | null;
+  /** 통신 두절 중이면 복구 시각 */
+  linkLostUntil: number | null;
 }
 
 export interface RouteInfo {
@@ -139,7 +153,9 @@ export type OrderStatus =
   | 'LAST_MILE'
   | 'DELIVERED'
   /** 바람 기준 초과로 라이더에게 넘어간 주문 */
-  | 'RIDER_ASSIGNED';
+  | 'RIDER_ASSIGNED'
+  /** 추락·비상착륙으로 배송 실패 */
+  | 'FAILED';
 
 export type DeliveryMode = 'DRONE' | 'RIDER';
 

@@ -98,6 +98,7 @@ export function DroneCard({ d }: { d: DroneView }) {
   const followDroneId = useViewStore((s) => s.followDroneId);
   const setFollow = useViewStore((s) => s.setFollow);
   const setSelected = useViewStore((s) => s.setSelected);
+  const enterFpv = useViewStore((s) => s.enterFpv);
   const following = followDroneId === d.id;
 
   const hs = Math.hypot(d.velocity.x, d.velocity.y);
@@ -113,8 +114,15 @@ export function DroneCard({ d }: { d: DroneView }) {
         </span>
         <span className="text-xs text-slate-500">기지 {dockName(d.homeDockId)}</span>
         <button
+          onClick={() => enterFpv(d.id)}
+          className="ml-auto rounded bg-slate-800 px-2 py-0.5 text-xs font-medium text-white hover:bg-slate-700"
+          title="이 드론의 1인칭 시점"
+        >
+          🎥 1인칭
+        </button>
+        <button
           onClick={() => setFollow(following ? null : d.id)}
-          className={`ml-auto rounded px-2 py-0.5 text-xs font-medium ${
+          className={`rounded px-2 py-0.5 text-xs font-medium ${
             following ? 'bg-sky-600 text-white' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
           }`}
         >

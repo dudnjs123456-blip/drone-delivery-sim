@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 
-export type ViewMode = '3D' | 'TOP';
+/** 3D: 자유 궤도, TOP: 상단, FPV: 선택한 드론 1인칭 */
+export type ViewMode = '3D' | 'TOP' | 'FPV';
 
 interface CameraInfo {
   /** 카메라 위치 (ENU, m) */
@@ -13,6 +14,8 @@ interface CameraInfo {
 
 interface ViewState {
   viewMode: ViewMode;
+  /** FPV 로 들어가기 전 시점 (나올 때 돌아간다) */
+  prevMode: Exclude<ViewMode, 'FPV'>;
   showLabels: boolean;
   /** A* 격자 경로(평활화 전) 표시 */
   showRawPath: boolean;
@@ -23,24 +26,37 @@ interface ViewState {
   followDroneId: string | null;
   /** 패널에서 선택한 드론 (경로 상세 표시) */
   selectedDroneId: string | null;
-  setViewMode: (m: ViewMode) => void;
+  /** 1인칭으로 볼 드론 */
+  fpvDroneId: string | null;
+  /** 미니맵 클릭으로 위치를 고르는 중이면 그 용도 */
+  pickMode: 'hazard' | null;
+  pickedPoint: { x: number; y: number } | null;
+  setViewMode: (m: Exclude<ViewMode, 'FPV'>) => void;
   toggleLabels: () => void;
   toggleRawPath: () => void;
   setCamera: (c: CameraInfo) => void;
   requestFocus: (x: number, y: number) => void;
   setFollow: (id: string | null) => void;
   setSelected: (id: string | null) => void;
+  enterFpv: (droneId: string) => void;
+  exitFpv: () => void;
+  setPickMode: (m: 'hazard' | null) => void;
+  setPicked: (p: { x: number; y: number } | null) => void;
 }
 
 export const useViewStore = create<ViewState>((set) => ({
   viewMode: '3D',
+  prevMode: '3D',
   showLabels: true,
   showRawPath: true,
   camera: { x: 0, y: 0, targetX: 0, targetY: 0 },
   focusRequest: null,
   followDroneId: null,
   selectedDroneId: null,
-  setViewMode: (viewMode) => set({ viewMode }),
+  fpvDroneId: null,
+  pickMode: null,
+  pickedPoint: null,
+  setViewMode: (viewMode) => set({ viewMode, prevMode: viewMode, fpvDroneId: null }),
   toggleLabels: () => set((s) => ({ showLabels: !s.showLabels })),
   toggleRawPath: () => set((s) => ({ showRawPath: !s.showRawPath })),
   setCamera: (camera) => set({ camera }),
@@ -48,4 +64,15 @@ export const useViewStore = create<ViewState>((set) => ({
   requestFocus: (x, y) => set((s) => ({ focusRequest: { x, y, n: (s.focusRequest?.n ?? 0) + 1 }, followDroneId: null })),
   setFollow: (followDroneId) => set((s) => ({ followDroneId, selectedDroneId: followDroneId ?? s.selectedDroneId })),
   setSelected: (selectedDroneId) => set({ selectedDroneId }),
+  enterFpv: (fpvDroneId) =>
+    set((s) => ({
+      fpvDroneId,
+      selectedDroneId: fpvDroneId,
+      followDroneId: null,
+      viewMode: 'FPV',
+      prevMode: s.viewMode === 'FPV' ? s.prevMode : s.viewMode,
+    })),
+  exitFpv: () => set((s) => ({ viewMode: s.prevMode, fpvDroneId: null })),
+  setPickMode: (pickMode) => set({ pickMode }),
+  setPicked: (pickedPoint) => set({ pickedPoint, pickMode: null }),
 }));

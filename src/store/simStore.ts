@@ -12,6 +12,7 @@ import { buildTripLegs, flattenLegs } from '@/sim/flight/route';
 import { defaultMap } from '@/sim/map/defaultMap';
 import { dockLaunchPads, stationPads } from '@/sim/map/pads';
 import { type PlanResult, PathPlanner } from '@/sim/pathfinding/planner';
+import type { HazardLogEntry, HazardSettings, HazardSpec, HazardState, ResponsePolicies, SafetyStats } from '@/sim/hazards/types';
 import type { FlightPhase, Order, OrderStatus, RouteInfo, Vec3 } from '@/sim/types';
 
 export const engine: SimEngine = new LocalSimEngine();
@@ -59,6 +60,9 @@ export interface DroneView {
   departAt: number | null;
   swapUntil: number | null;
   cruiseAltM: number | null;
+  headingRad: number;
+  alert: string | null;
+  linkLostUntil: number | null;
 }
 
 export interface OrderSummary {
@@ -80,6 +84,11 @@ interface SimUiState {
   traffic: TrafficStats;
   alerts: readonly SimEvent[];
   peakOrdersPerMin: number | null;
+  hazards: readonly HazardState[];
+  hazardLog: readonly HazardLogEntry[];
+  safety: SafetyStats;
+  policies: ResponsePolicies;
+  hazardSettings: HazardSettings;
   message: { text: string; ok: boolean } | null;
   selection: { dockId: string; stationId: string };
   preview: RoutePreview | null;
@@ -91,6 +100,10 @@ interface SimUiState {
   createOrder: () => void;
   setPeak: (perMin: number | null) => void;
   setReservations: (enabled: boolean) => void;
+  injectHazard: (spec: HazardSpec, atSec?: number) => { ok: boolean; text: string };
+  cancelHazard: (id: string) => void;
+  setPolicies: (p: Partial<ResponsePolicies>) => void;
+  setHazardSettings: (s: Partial<HazardSettings>) => void;
   publish: () => void;
 }
 
@@ -110,6 +123,9 @@ function readDrones(): DroneView[] {
     departAt: d.departAt,
     swapUntil: d.swapUntil,
     cruiseAltM: d.cruiseAltM,
+    headingRad: d.headingRad,
+    alert: d.alert,
+    linkLostUntil: d.linkLostUntil,
   }));
 }
 
@@ -147,6 +163,11 @@ export const useSimStore = create<SimUiState>((set, get) => ({
   traffic: engine.getSnapshot().traffic,
   alerts: [],
   peakOrdersPerMin: null,
+  hazards: [],
+  hazardLog: [],
+  safety: engine.getSnapshot().safety,
+  policies: engine.getSnapshot().policies,
+  hazardSettings: engine.getSnapshot().hazardSettings,
   message: null,
   selection: { dockId: defaultMap.docks[0].id, stationId: defaultMap.stations[0].id },
   preview: null,
@@ -187,6 +208,23 @@ export const useSimStore = create<SimUiState>((set, get) => ({
     engine.dispatch({ type: 'SET_RESERVATIONS', enabled });
     get().publish();
   },
+  injectHazard: (spec, atSec) => {
+    const r = engine.dispatch({ type: 'INJECT_HAZARD', spec, atSec });
+    get().publish();
+    return r.ok ? { ok: true, text: `${r.hazardId} 등록` } : { ok: false, text: r.reason };
+  },
+  cancelHazard: (hazardId) => {
+    engine.dispatch({ type: 'CANCEL_HAZARD', hazardId });
+    get().publish();
+  },
+  setPolicies: (policies) => {
+    engine.dispatch({ type: 'SET_POLICIES', policies });
+    get().publish();
+  },
+  setHazardSettings: (settings) => {
+    engine.dispatch({ type: 'SET_HAZARD_SETTINGS', settings });
+    get().publish();
+  },
   publish: () => {
     const snap = engine.getSnapshot();
     const log = snap.phaseLog;
@@ -202,6 +240,11 @@ export const useSimStore = create<SimUiState>((set, get) => ({
       traffic: { ...snap.traffic },
       alerts: snap.activeAlerts.length === 0 && s.alerts.length === 0 ? s.alerts : snap.activeAlerts.slice(),
       peakOrdersPerMin: snap.peakOrdersPerMin,
+      hazards: snap.hazards.map((h) => ({ ...h, position: h.position ? { ...h.position } : undefined })),
+      hazardLog: s.hazardLog.length === snap.hazardLog.length && s.hazardLog.at(-1) === snap.hazardLog.at(-1) ? s.hazardLog : snap.hazardLog.slice(),
+      safety: { ...snap.safety },
+      policies: snap.policies,
+      hazardSettings: snap.hazardSettings,
     }));
   },
 }));

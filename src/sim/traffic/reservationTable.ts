@@ -64,6 +64,20 @@ export class ReservationTable {
     }
   }
 
+  /** fromSlot 이후 droneId 의 예약을 모두 지운다 (경로가 바뀐 경우) */
+  release(droneId: string, fromSlot: number): void {
+    for (const [s, m] of this.slots) {
+      if (s < fromSlot) continue;
+      for (const [k, owner] of m) {
+        if (owner === droneId) {
+          m.delete(k);
+          this.count--;
+        }
+      }
+      if (m.size === 0) this.slots.delete(s);
+    }
+  }
+
   /** beforeSlot 보다 이전 칸을 지운다 */
   prune(beforeSlot: number): void {
     for (const [s, m] of this.slots) {

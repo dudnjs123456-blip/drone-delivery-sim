@@ -4,6 +4,7 @@
  * 나중에 PX4 SITL + Gazebo 브리지로 교체할 수 있도록 렌더링은 이 인터페이스만 사용한다.
  */
 import type { SimConfig } from '../config';
+import type { HazardLogEntry, HazardSettings, HazardSpec, HazardState, ResponsePolicies, SafetyStats } from '../hazards/types';
 import type { Drone, FlightPhase, MapData, Order, WindState } from '../types';
 
 export type SimCommand =
@@ -13,9 +14,17 @@ export type SimCommand =
   | { type: 'SET_PEAK_MODE'; ordersPerMin: number | null }
   | { type: 'SET_WIND'; fromDirRad: number; meanSpeed: number; gustiness: number }
   /** 시간-공간 예약 테이블 사용 여부 (끄면 충돌 회피 없이 바로 출발 — 비교용) */
-  | { type: 'SET_RESERVATIONS'; enabled: boolean };
+  | { type: 'SET_RESERVATIONS'; enabled: boolean }
+  /** 돌발 상황 주입. atSec(절대 시뮬레이션 시각)이 없으면 즉시 */
+  | { type: 'INJECT_HAZARD'; spec: HazardSpec; atSec?: number }
+  /** 예약된 돌발 상황은 취소, 진행 중이면 종료 */
+  | { type: 'CANCEL_HAZARD'; hazardId: string }
+  | { type: 'SET_POLICIES'; policies: Partial<ResponsePolicies> }
+  | { type: 'SET_HAZARD_SETTINGS'; settings: Partial<HazardSettings> };
 
-export type DispatchResult = { ok: true; droneId?: string; orderId?: string } | { ok: false; reason: string };
+export type DispatchResult =
+  | { ok: true; droneId?: string; orderId?: string; hazardId?: string }
+  | { ok: false; reason: string };
 
 export interface TrafficStats {
   reservationsEnabled: boolean;
@@ -62,6 +71,11 @@ export interface SimSnapshot {
   traffic: TrafficStats;
   /** 피크 모드 주문 수 (건/분), 꺼져 있으면 null */
   peakOrdersPerMin: number | null;
+  hazards: readonly HazardState[];
+  hazardLog: readonly HazardLogEntry[];
+  safety: SafetyStats;
+  policies: ResponsePolicies;
+  hazardSettings: HazardSettings;
 }
 
 export interface SimEngine {

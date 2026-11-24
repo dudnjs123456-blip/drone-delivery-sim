@@ -3,6 +3,7 @@
 import { useFrame, useThree } from '@react-three/fiber';
 import { useMemo } from 'react';
 import * as THREE from 'three';
+import { useViewStore } from '@/store/viewStore';
 import { labelAnchors, labelElements } from './labels';
 
 /** 매 프레임 등록된 모든 라벨의 앵커를 화면 좌표로 투영해 DOM 위치를 갱신한다 */
@@ -11,9 +12,11 @@ export function LabelProjector() {
   const tmp = useMemo(() => new THREE.Vector3(), []);
 
   useFrame(({ camera }) => {
+    const view = useViewStore.getState();
+    const hidden = view.viewMode === 'FPV' ? `drone:${view.fpvDroneId}` : null;
     for (const [id, el] of labelElements) {
       const anchor = labelAnchors.get(id);
-      if (!anchor) {
+      if (!anchor || id === hidden) {
         el.style.visibility = 'hidden';
         continue;
       }

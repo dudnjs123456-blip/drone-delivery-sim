@@ -46,18 +46,23 @@ export class PathPlanner {
     this.losSampleM = pf.losSampleM;
   }
 
-  plan(start: Vec3, goal: Vec3): PlanResult {
+  /**
+   * @param opts.allowBlockedStart 비행 중 재계획: 출발점이 (새로 생긴) 장애물 여유 안이어도
+   *   가장 가까운 빈 격자로 빠져나가는 경로를 만든다.
+   */
+  plan(start: Vec3, goal: Vec3, opts: { allowBlockedStart?: boolean } = {}): PlanResult {
     const t0 = now();
-    if (this.field.isBlocked(start.x, start.y, start.z)) return { ok: false, reason: '출발 지점 상공이 장애물 여유 안에 있습니다' };
+    const startBlocked = this.field.isBlocked(start.x, start.y, start.z);
+    if (startBlocked && !opts.allowBlockedStart) return { ok: false, reason: '출발 지점 상공이 장애물 여유 안에 있습니다' };
     if (this.field.isBlocked(goal.x, goal.y, goal.z)) return { ok: false, reason: '도착 지점 상공이 장애물 여유 안에 있습니다' };
 
     // 직선으로 갈 수 있으면 탐색하지 않는다
-    if (this.los(start, goal)) {
+    if (!startBlocked && this.los(start, goal)) {
       return this.result([start, goal], [start, goal], 0, t0);
     }
 
     const g = this.grid;
-    const s = g.nearestFree(g.cellAt(start));
+    const s = g.nearestFree(g.cellAt(start), startBlocked ? 40 : 4);
     const t = g.nearestFree(g.cellAt(goal));
     if (!s || !t) return { ok: false, reason: '출발·도착 근처에 빈 격자가 없습니다' };
 

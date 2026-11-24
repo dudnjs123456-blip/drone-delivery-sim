@@ -4,6 +4,7 @@ import { useFrame } from '@react-three/fiber';
 import { useEffect, useMemo, useRef } from 'react';
 import * as THREE from 'three';
 import { engine, runner, useSimStore } from '@/store/simStore';
+import { useViewStore } from '@/store/viewStore';
 import type { Vec3 } from '@/sim/types';
 import { setLabelAnchor } from '../labels/labels';
 import { isAirborne, phaseColor } from '../phase';
@@ -109,6 +110,9 @@ export function Drones() {
     const spin = tmp.spin;
     const drones = engine.getSnapshot().drones;
     const n = Math.min(drones.length, count);
+    const view = useViewStore.getState();
+    // 1인칭으로 타고 있는 드론은 카메라를 가리지 않게 숨긴다
+    const hiddenId = view.viewMode === 'FPV' ? view.fpvDroneId : null;
     for (let i = 0; i < n; i++) {
       const d = drones[i];
       const p = runner.interpolatedPosition(d, tmp.p);
@@ -118,6 +122,7 @@ export function Drones() {
       tmp.q.setFromEuler(tmp.e);
       tmp.pos.set(p.x, p.z, -p.y);
       tmp.w.compose(tmp.pos, tmp.q, tmp.scl);
+      if (d.id === hiddenId) tmp.w.makeScale(0, 0, 0);
 
       const airborne = isAirborne(d.phase);
       if (airborne && !runner.paused) spin[i] += ROTOR_SPIN_RAD_S * delta * Math.min(runner.speed, 3);

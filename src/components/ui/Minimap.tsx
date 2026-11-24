@@ -14,7 +14,11 @@ import { phaseColor } from '../phase';
 export function Minimap({ map }: { map: MapData }) {
   const camera = useViewStore((s) => s.camera);
   const requestFocus = useViewStore((s) => s.requestFocus);
+  const pickMode = useViewStore((s) => s.pickMode);
+  const picked = useViewStore((s) => s.pickedPoint);
+  const setPicked = useViewStore((s) => s.setPicked);
   const drones = useSimStore((s) => s.drones);
+  const hazards = useSimStore((s) => s.hazards);
   const { minX, minY, maxX, maxY } = map.bounds;
   const w = maxX - minX;
   const h = maxY - minY;
@@ -24,7 +28,8 @@ export function Minimap({ map }: { map: MapData }) {
     const ctm = svg.getScreenCTM();
     if (!ctm) return;
     const p = new DOMPoint(e.clientX, e.clientY).matrixTransform(ctm.inverse());
-    requestFocus(p.x, -p.y);
+    if (pickMode) setPicked({ x: p.x, y: -p.y });
+    else requestFocus(p.x, -p.y);
   };
 
   // 카메라 위치는 미니맵 범위 안으로 잘라서 방향만 표시한다
@@ -36,11 +41,11 @@ export function Minimap({ map }: { map: MapData }) {
     <div className="rounded-lg bg-white/90 p-2 shadow-lg backdrop-blur">
       <div className="mb-1 flex items-center justify-between text-[11px] text-slate-600">
         <span className="font-semibold">미니맵</span>
-        <span>N↑ · 클릭해서 이동</span>
+        <span className={pickMode ? 'animate-pulse font-semibold text-amber-600' : ''}>{pickMode ? '📍 위치를 클릭하세요' : 'N↑ · 클릭해서 이동'}</span>
       </div>
       <svg
         viewBox={`${minX} ${-maxY} ${w} ${h}`}
-        className="block h-auto w-56 cursor-crosshair rounded bg-[#dfe5d8]"
+        className={`block h-auto w-56 cursor-crosshair rounded bg-[#dfe5d8] ${pickMode ? 'ring-2 ring-amber-500' : ''}`}
         onClick={onClick}
       >
         {map.noFlyZones.map((z) => (
@@ -95,9 +100,39 @@ export function Minimap({ map }: { map: MapData }) {
             />
           ) : null,
         )}
-        {drones.map((d) => (
-          <circle key={d.id} cx={d.position.x} cy={-d.position.y} r={8} fill={phaseColor[d.phase]} stroke="white" strokeWidth={2.5} />
-        ))}
+        {hazards
+          .filter((h) => h.status === 'ACTIVE')
+          .map((h) => {
+            const s = h.spec;
+            if (s.kind === 'TFR')
+              return <circle key={h.id} cx={s.center.x} cy={-s.center.y} r={s.radiusM} fill="#f97316" fillOpacity={0.25} stroke="#f97316" strokeWidth={3} strokeDasharray="10 6" />;
+            if (s.kind === 'OBSTACLE')
+              return (
+                <rect
+                  key={h.id}
+                  x={s.center.x - s.sizeM / 2}
+                  y={-s.center.y - s.sizeM / 2}
+                  width={s.sizeM}
+                  height={s.sizeM}
+                  fill={h.discovered ? '#facc15' : '#a3a3a3'}
+                  stroke="#854d0e"
+                  strokeWidth={2}
+                />
+              );
+            if (s.kind === 'INTRUDER' && h.position)
+              return <circle key={h.id} cx={h.position.x} cy={-h.position.y} r={10} fill="#e11d48" stroke="white" strokeWidth={2.5} />;
+            return null;
+          })}
+        {drones.map((d) =>
+          d.phase === 'FAILED' ? (
+            <text key={d.id} x={d.position.x} y={-d.position.y} fontSize={26} textAnchor="middle" dominantBaseline="central" fill="#b91c1c" fontWeight={700}>
+              ✕
+            </text>
+          ) : (
+            <circle key={d.id} cx={d.position.x} cy={-d.position.y} r={8} fill={phaseColor[d.phase]} stroke="white" strokeWidth={2.5} />
+          ),
+        )}
+        {picked && <circle cx={picked.x} cy={-picked.y} r={9} fill="none" stroke="#d97706" strokeWidth={4} />}
         {/* 카메라 → 바라보는 지점 */}
         <line
           x1={camX}

@@ -91,6 +91,26 @@ export interface SimConfig {
     /** 직선 가시성 검사 샘플 간격 (m) */
     losSampleM: number;
   };
+  hazards: {
+    /** 기체 센서 탐지 거리 기본값 (m) */
+    sensorRangeM: number;
+    /** ADS-B/UTM 비협조 비행체 경보 거리 (m) */
+    adsbAlertRangeM: number;
+    /** 침입기가 멀어져 대기를 푸는 거리 (m) */
+    intruderClearRangeM: number;
+    /** 비협조 비행체 근접(NMAC) 판정 거리 (m) */
+    nearMissM: number;
+    /** 공중 충돌(추락) 판정 거리 (m) */
+    collisionM: number;
+    /** 고도 회피 폭 (m) */
+    verticalAvoidM: number;
+    /** 장애물 탐지 후 대기·복귀 정책의 대기 시간 (s) */
+    obstacleHoldSec: number;
+    /** 침입기 대기의 최대 시간 (s). 넘으면 그냥 재개한다 */
+    intruderMaxHoldSec: number;
+    /** 통신 두절 시 대기 후 복귀 정책의 대기 시간 (s) */
+    linkLossHoldSec: number;
+  };
   fleet: {
     /** 운용 드론 수. 도크에 순서대로 나눠 배치한다 */
     droneCount: number;
@@ -155,6 +175,17 @@ export const defaultConfig: SimConfig = {
     verticalClearanceM: 10,
     noFlyMarginM: 5,
     losSampleM: 1,
+  },
+  hazards: {
+    sensorRangeM: 60,
+    adsbAlertRangeM: 250,
+    intruderClearRangeM: 120,
+    nearMissM: 20,
+    collisionM: 5,
+    verticalAvoidM: 30,
+    obstacleHoldSec: 10,
+    intruderMaxHoldSec: 90,
+    linkLossHoldSec: 30,
   },
   fleet: {
     droneCount: 16,

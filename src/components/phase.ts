@@ -7,6 +7,8 @@ export const phaseLabel: Record<FlightPhase, string> = {
   DESCEND: '하강',
   LANDED: '하역',
   RETURN: '복귀',
+  HOLD: '공중 대기',
+  FAILED: '운용 불가',
 };
 
 export const phaseColor: Record<FlightPhase, string> = {
@@ -16,6 +18,9 @@ export const phaseColor: Record<FlightPhase, string> = {
   DESCEND: '#ca8a04',
   LANDED: '#9333ea',
   RETURN: '#475569',
+  HOLD: '#ea580c',
+  FAILED: '#b91c1c',
 };
 
-export const isAirborne = (p: FlightPhase) => p === 'TAKEOFF' || p === 'CRUISE' || p === 'DESCEND' || p === 'RETURN';
+export const isAirborne = (p: FlightPhase) =>
+  p === 'TAKEOFF' || p === 'CRUISE' || p === 'DESCEND' || p === 'RETURN' || p === 'HOLD';

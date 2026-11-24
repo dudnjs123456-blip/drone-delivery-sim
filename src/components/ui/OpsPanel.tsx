@@ -8,6 +8,7 @@ import { type DroneView, useSimStore } from '@/store/simStore';
 import { useViewStore } from '@/store/viewStore';
 import { phaseColor, phaseLabel } from '../phase';
 import { DroneCard } from './DronePanel';
+import { HazardPanel } from './HazardPanel';
 
 const orderStatusLabel: Record<OrderStatus, string> = {
   COOKING: '조리',
@@ -18,6 +19,7 @@ const orderStatusLabel: Record<OrderStatus, string> = {
   LAST_MILE: '문 앞 이동',
   DELIVERED: '완료',
   RIDER_ASSIGNED: '라이더',
+  FAILED: '실패',
 };
 
 const storeName = (id: string) => defaultMap.stores.find((s) => s.id === id)?.name ?? id;
@@ -163,6 +165,7 @@ function TrafficSection() {
 }
 
 function droneStatus(d: DroneView, time: number): string {
+  if (d.alert) return d.alert;
   if (d.swapUntil !== null) return '배터리 교체';
   if (d.departAt !== null) return `출발 T-${Math.max(0, d.departAt - time).toFixed(0)}s`;
   return phaseLabel[d.phase];
@@ -207,11 +210,35 @@ function DroneList() {
 }
 
 export function OpsPanel() {
+  const [tab, setTab] = useState<'ops' | 'hazard'>('ops');
+  const activeHazards = useSimStore((s) => s.hazards.filter((h) => h.status === 'ACTIVE' || h.status === 'SCHEDULED').length);
   return (
-    <div className="max-h-[calc(100vh-7rem)] w-[22rem] space-y-2 overflow-y-auto rounded-lg bg-white/95 p-3 shadow-lg backdrop-blur">
-      <OrdersSection />
-      <TrafficSection />
-      <DroneList />
+    <div className="flex max-h-[calc(100vh-7rem)] w-[23rem] flex-col rounded-lg bg-white/95 shadow-lg backdrop-blur">
+      <div className="flex border-b border-slate-200 text-xs font-semibold">
+        <button
+          onClick={() => setTab('ops')}
+          className={`flex-1 rounded-tl-lg px-3 py-2 ${tab === 'ops' ? 'bg-white text-slate-900' : 'bg-slate-100 text-slate-500 hover:text-slate-800'}`}
+        >
+          운항 관제
+        </button>
+        <button
+          onClick={() => setTab('hazard')}
+          className={`flex-1 rounded-tr-lg px-3 py-2 ${tab === 'hazard' ? 'bg-white text-slate-900' : 'bg-slate-100 text-slate-500 hover:text-slate-800'}`}
+        >
+          ⚡ 돌발 상황{activeHazards > 0 && <span className="ml-1 rounded-full bg-rose-600 px-1.5 text-[10px] text-white">{activeHazards}</span>}
+        </button>
+      </div>
+      <div className="space-y-2 overflow-y-auto p-3">
+        {tab === 'ops' ? (
+          <>
+            <OrdersSection />
+            <TrafficSection />
+            <DroneList />
+          </>
+        ) : (
+          <HazardPanel />
+        )}
+      </div>
     </div>
   );
 }
