@@ -100,6 +100,7 @@ export function DronePaths() {
   const queued = useSimStore((s) => s.traffic.queuedOrders);
   const showRawPath = useViewStore((s) => s.showRawPath);
   const selectedId = useViewStore((s) => s.selectedDroneId);
+  const time = useSimStore((s) => s.time);
   const anyBusy = drones.some((d) => d.phase !== 'IDLE' || d.departAt !== null);
 
   return (
@@ -109,10 +110,12 @@ export function DronePaths() {
         .map((d) => {
           const returning = d.phase === 'RETURN';
           const selected = d.id === selectedId;
-          const color = selected ? '#f59e0b' : returning ? '#475569' : '#0284c7';
+          // 방금 경로를 바꿨으면 새 경로를 초록으로 (버린 경로는 ReactionMarkers 가 빨간 점선으로)
+          const changed = d.ghostUntil !== null && time < d.ghostUntil;
+          const color = changed ? '#10b981' : selected ? '#f59e0b' : returning ? '#475569' : '#0284c7';
           return (
             <group key={d.id}>
-              <PathLine path={d.path} color={color} dashed={returning} width={selected ? 3.5 : 2} opacity={selected ? 1 : 0.75} />
+              <PathLine path={d.path} color={color} dashed={returning && !changed} width={selected || changed ? 3.5 : 2} opacity={selected || changed ? 1 : 0.75} />
               {selected && <Waypoints path={d.path} color={color} />}
               {selected && showRawPath && d.route && d.route.rawPath.length > 2 && (
                 <PathLine path={d.route.rawPath} color="#a855f7" width={1.2} opacity={0.7} />

@@ -62,6 +62,10 @@ import type {
 } from './SimEngine';
 
 const PHASE_LOG_LIMIT = 2000;
+/** 격납고 ↔ 패드 지상 이동 표시 시간 (s) */
+const TAXI_SEC = 6;
+/** 버린 경로를 보여 주는 시간 (s) */
+const GHOST_SEC = 20;
 const HAZARD_LOG_LIMIT = 300;
 /** 예약 테이블에서 지난 칸을 지우는 주기 (s) */
 const PRUNE_EVERY_SEC = 30;
@@ -303,6 +307,9 @@ export class LocalSimEngine implements SimEngine {
         cruiseAltM: null,
         alert: null,
         linkLostUntil: null,
+        taxi: null,
+        ghostPath: null,
+        ghostUntil: null,
       };
       this.runtimes.push({ drone, slot, mission: null, linkLostUntilStep: null });
     }
@@ -525,6 +532,7 @@ export class LocalSimEngine implements SimEngine {
       return;
     }
     // 패드에서 격납고로
+    d.taxi = { from: clone(d.position), to: clone(rt.slot), start: this.time, end: this.time + TAXI_SEC };
     d.position = clone(rt.slot);
     if (!d.linkLostUntil) d.alert = null;
     this.setPhase(rt, 'IDLE');
@@ -978,7 +986,16 @@ export class LocalSimEngine implements SimEngine {
     return Math.min(this.config.altitude.maxM, Math.max(pf.minAltitudeM, pf.minAltitudeM + k * pf.layerHeightM));
   }
 
+  /** 경로를 바꾸기 전: 아직 안 간 원래 경로를 잠시 보여 주도록 남긴다 */
+  private keepGhost(rt: DroneRuntime) {
+    const d = rt.drone;
+    if (d.path.length < 2) return;
+    d.ghostPath = [clone(d.position), ...d.path.slice(Math.max(1, d.pathIndex)).map(clone)];
+    d.ghostUntil = this.time + GHOST_SEC;
+  }
+
   private setOutLegs(rt: DroneRuntime, legs: Leg[], route: RouteInfo) {
+    this.keepGhost(rt);
     const m = rt.mission!;
     const f = flattenLegs(legs);
     m.legs.out = legs;
@@ -999,6 +1016,7 @@ export class LocalSimEngine implements SimEngine {
     m.backOffsets = f.offsets;
     m.backRoute = route;
     if (startNow) {
+      this.keepGhost(rt);
       m.progress = { ...m.progress, stage: 'RETURN', legIndex: 0, wpIndex: 1 };
       rt.drone.path = f.path;
       rt.drone.pathIndex = 1;
@@ -1396,6 +1414,7 @@ export class LocalSimEngine implements SimEngine {
     const m = rt.mission!;
     const d = rt.drone;
     m.loading = true;
+    d.taxi = { from: clone(d.position), to: clone(m.dockPad), start: this.time, end: this.time + Math.min(TAXI_SEC, this.config.kitchen.loadSec * 0.4) };
     d.position = clone(m.dockPad);
     d.payloadKg = m.payloadKg;
     const o = m.orderId ? this.ordersById.get(m.orderId) : undefined;

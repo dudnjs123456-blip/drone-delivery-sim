@@ -5,9 +5,10 @@ import { useFrame, useThree } from '@react-three/fiber';
 import { type ComponentRef, useEffect, useMemo, useRef } from 'react';
 import * as THREE from 'three';
 import type { MapData } from '@/sim/types';
-import { engine, runner } from '@/store/simStore';
+import { engine } from '@/store/simStore';
 import { type ViewMode, useViewStore } from '@/store/viewStore';
 import { enuToThree, threeToEnu } from '../coords';
+import { droneDisplayPos, runnerDisplayPos } from '../scenePos';
 
 type Controls = ComponentRef<typeof OrbitControls>;
 
@@ -156,7 +157,7 @@ export function CameraRig({ map }: { map: MapData }) {
     if (view.viewMode === 'FPV') {
       const d = engine.getSnapshot().drones.find((x) => x.id === view.fpvDroneId);
       if (d) {
-        const p = runner.interpolatedPosition(d, tmp.p);
+        const p = droneDisplayPos(d, tmp.p);
         const f = fpv.current;
         // 방위는 부드럽게 따라간다 (각도 차이를 -π~π 로 접어서)
         if (!f.init) {
@@ -191,10 +192,16 @@ export function CameraRig({ map }: { map: MapData }) {
       }
 
       // 드론 따라가기: 목표점을 드론 쪽으로 부드럽게 옮기고 카메라도 같은 만큼 이동
-      if (followDroneId && !anim.current) {
-        const d = engine.getSnapshot().drones.find((x) => x.id === followDroneId);
-        if (d) {
-          const p = runner.interpolatedPosition(d, tmp.p);
+      if ((followDroneId || view.followRunnerId) && !anim.current) {
+        let p: { x: number; y: number; z: number } | null = null;
+        if (view.followRunnerId) {
+          const r = engine.getSnapshot().runners.find((x) => x.id === view.followRunnerId);
+          if (r) p = runnerDisplayPos(r).pos;
+        } else {
+          const d = engine.getSnapshot().drones.find((x) => x.id === followDroneId);
+          if (d) p = droneDisplayPos(d, tmp.p);
+        }
+        if (p) {
           const k = 1 - Math.exp(-delta * 8);
           tmp.v.set(p.x, p.z, -p.y).sub(c.target).multiplyScalar(k);
           c.target.add(tmp.v);

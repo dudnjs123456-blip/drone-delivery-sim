@@ -7,6 +7,7 @@ import { engine, runner, useSimStore } from '@/store/simStore';
 import { useViewStore } from '@/store/viewStore';
 import type { Vec3 } from '@/sim/types';
 import { setLabelAnchor } from '../labels/labels';
+import { droneDisplayPos } from '../scenePos';
 import { isAirborne, phaseColor } from '../phase';
 
 /** 실제 드론(약 1.2m)은 단지 규모에서 너무 작아 보여 렌더링만 키운다 */
@@ -115,7 +116,7 @@ export function Drones() {
     const hiddenId = view.viewMode === 'FPV' ? view.fpvDroneId : null;
     for (let i = 0; i < n; i++) {
       const d = drones[i];
-      const p = runner.interpolatedPosition(d, tmp.p);
+      const p = droneDisplayPos(d, tmp.p);
       const hs = Math.hypot(d.velocity.x, d.velocity.y);
       // 방위(yaw)를 먼저, 진행 방향 기울기(pitch)는 기체 기준
       tmp.e.set(-Math.min(0.25, hs * 0.02), -d.headingRad, 0, 'YXZ');

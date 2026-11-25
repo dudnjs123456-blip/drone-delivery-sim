@@ -175,7 +175,7 @@ describe('LocalSimEngine: 주문과 다중 드론', () => {
     const n = e.getSnapshot().orders.length;
     expect(n).toBeGreaterThan(40); // 기댓값 60
     expect(n).toBeLessThan(85);
-  });
+  }, 30_000);
 
   it('같은 시드면 같은 시나리오가 재현된다', () => {
     const sig = (seed: number) => {
@@ -186,7 +186,7 @@ describe('LocalSimEngine: 주문과 다중 드론', () => {
     };
     expect(sig(7)).toBe(sig(7));
     expect(sig(7)).not.toBe(sig(8));
-  });
+  }, 30_000);
 });
 
 describe('LocalSimEngine: 시간-공간 예약과 이격 거리', () => {

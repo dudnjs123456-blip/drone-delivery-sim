@@ -78,3 +78,23 @@ export function intruderVelocity(spec: Extract<HazardSpec, { kind: 'INTRUDER' }>
   const h = (spec.headingDeg * Math.PI) / 180;
   return { x: Math.sin(h) * spec.speedMs, y: Math.cos(h) * spec.speedMs, z: 0 };
 }
+
+/** 드론의 남은 경로를 따라 dist(수평) 앞의 점. 경로가 없으면 진행 방향으로 */
+export function pointAhead(
+  d: { position: Vec3; path: readonly Vec3[]; pathIndex: number; headingRad: number },
+  dist: number,
+): { x: number; y: number } {
+  const pts: Vec3[] = [d.position, ...d.path.slice(Math.max(1, d.pathIndex))];
+  let left = dist;
+  for (let i = 0; i + 1 < pts.length; i++) {
+    const a = pts[i];
+    const b = pts[i + 1];
+    const seg = Math.hypot(b.x - a.x, b.y - a.y);
+    if (seg >= left && seg > 0) {
+      const t = left / seg;
+      return { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t };
+    }
+    left -= seg;
+  }
+  return { x: d.position.x + Math.sin(d.headingRad) * dist, y: d.position.y + Math.cos(d.headingRad) * dist };
+}

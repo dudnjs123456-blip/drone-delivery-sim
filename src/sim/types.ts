@@ -128,6 +128,14 @@ export interface Drone {
   alert: string | null;
   /** 통신 두절 중이면 복구 시각 */
   linkLostUntil: number | null;
+  /**
+   * 지상 이동(격납고 → 패드, 패드 → 격납고) 표시용.
+   * 시뮬레이션 위치는 이미 도착점이고, 화면만 이 구간을 따라 움직인다.
+   */
+  taxi: { from: Vec3; to: Vec3; start: number; end: number } | null;
+  /** 돌발 상황으로 버린 원래 경로 (화면에 잠시 보여 준다) */
+  ghostPath: Vec3[] | null;
+  ghostUntil: number | null;
 }
 
 export interface RouteInfo {

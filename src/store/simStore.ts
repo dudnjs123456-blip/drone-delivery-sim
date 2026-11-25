@@ -14,6 +14,7 @@ import { dockLaunchPads, stationPads } from '@/sim/map/pads';
 import { type PlanResult, PathPlanner } from '@/sim/pathfinding/planner';
 import type { HazardLogEntry, HazardSettings, HazardSpec, HazardState, ResponsePolicies, SafetyStats } from '@/sim/hazards/types';
 import { kitchenProfile } from '@/sim/orders/firstMile';
+import { SCENARIOS, type ScenarioRun, scenarioResult } from './scenarios';
 import type { FlightPhase, Order, OrderStatus, RouteInfo, Vec3 } from '@/sim/types';
 
 export const engine: SimEngine = new LocalSimEngine();
@@ -64,7 +65,25 @@ export interface DroneView {
   headingRad: number;
   alert: string | null;
   linkLostUntil: number | null;
+  taxi: { from: Vec3; to: Vec3; start: number; end: number } | null;
+  ghostPath: Vec3[] | null;
+  ghostUntil: number | null;
 }
+
+export interface Toast {
+  key: number;
+  t: number;
+  text: string;
+  severity: 'info' | 'warn' | 'bad' | 'good';
+  droneId?: string;
+  /** 표시 시작 (실제 시각 ms) */
+  shownAt: number;
+}
+
+/** 알림을 화면에 두는 실제 시간 (ms) */
+const TOAST_MS = 7000;
+const MAX_TOASTS = 5;
+let toastSeq = 0;
 
 /** 주문 1건의 구간 (완료 주문 평균) */
 export const ORDER_SEGMENTS = [
@@ -132,6 +151,8 @@ interface SimUiState {
   kitchens: KitchenView[];
   runners: RunnerView[];
   firstMileScale: number;
+  scenario: ScenarioRun | null;
+  toasts: Toast[];
   message: { text: string; ok: boolean } | null;
   selection: { dockId: string; stationId: string };
   preview: RoutePreview | null;
@@ -148,6 +169,9 @@ interface SimUiState {
   setPolicies: (p: Partial<ResponsePolicies>) => void;
   setHazardSettings: (s: Partial<HazardSettings>) => void;
   setFirstMileScale: (scale: number) => void;
+  /** 원클릭 시나리오 시작. 띄운 드론 id 를 돌려준다 */
+  runScenario: (presetId: string) => { ok: true; droneId: string } | { ok: false; text: string };
+  dismissToast: (key: number) => void;
   publish: () => void;
 }
 
@@ -170,10 +194,49 @@ function readDrones(): DroneView[] {
     headingRad: d.headingRad,
     alert: d.alert,
     linkLostUntil: d.linkLostUntil,
+    taxi: d.taxi,
+    ghostPath: d.ghostPath,
+    ghostUntil: d.ghostUntil,
   }));
 }
 
 const RECENT_ORDERS = 8;
+
+/** 새로 생긴 돌발 상황 로그를 알림으로 만들고, 오래된 알림은 지운다 */
+function nextToasts(cur: Toast[], prevLog: readonly HazardLogEntry[], log: readonly HazardLogEntry[]): Toast[] {
+  const now = Date.now();
+  let out = cur.filter((t) => now - t.shownAt < TOAST_MS);
+  if (log.length && log.at(-1) !== prevLog.at(-1)) {
+    // 이전에 본 마지막 항목 뒤부터가 새 항목 (로그 앞부분이 잘려도 동작하도록 참조로 찾는다)
+    const last = prevLog.at(-1);
+    const from = last ? log.lastIndexOf(last) + 1 : 0;
+    for (const e of log.slice(from)) {
+      out.push({ key: ++toastSeq, t: e.t, text: e.text, severity: e.severity, droneId: e.droneId, shownAt: now });
+    }
+  }
+  if (out.length > MAX_TOASTS) out = out.slice(out.length - MAX_TOASTS);
+  return out.length === cur.length && out.every((t, i) => t === cur[i]) ? cur : out;
+}
+
+/** 시나리오 진행: 이륙 → 순항 4초 뒤 주입 → 귀환(또는 운용 불가) 시 결과 */
+function tickScenario(sc: ScenarioRun | null, snap: ReturnType<SimEngine['getSnapshot']>, save: (s: ScenarioRun) => void) {
+  if (!sc || sc.stage === 'DONE') return;
+  const d = snap.drones.find((x) => x.id === sc.droneId);
+  const p = SCENARIOS.find((x) => x.id === sc.presetId);
+  if (!d || !p) return;
+  const t = snap.time;
+  if (sc.stage === 'LAUNCHING' && d.phase === 'CRUISE') {
+    save({ ...sc, stage: 'CRUISING', cruiseSince: t });
+  } else if (sc.stage === 'CRUISING' && t - (sc.cruiseSince ?? t) >= 4) {
+    const r = engine.dispatch({ type: 'INJECT_HAZARD', spec: p.build(d) });
+    save({ ...sc, stage: 'INJECTED', injectedAt: t, hazardId: r.ok ? r.hazardId : undefined });
+  } else if (sc.stage === 'INJECTED' && t - (sc.injectedAt ?? t) > 1 && (d.phase === 'IDLE' || d.phase === 'FAILED')) {
+    const delivered = snap.phaseLog.some((c) => c.droneId === d.id && c.to === 'LANDED' && c.t >= sc.startedAt);
+    save({ ...sc, stage: 'DONE', result: scenarioResult(sc.before, snap.safety, delivered, d.phase === 'FAILED', t - sc.startedAt) });
+  } else if (t - sc.startedAt > 1200) {
+    save({ ...sc, stage: 'DONE', result: { safe: false, delivered: false, durationSec: t - sc.startedAt, lines: [{ text: '시간 초과 (20분)', tone: 'warn' }] } });
+  }
+}
 
 function readKitchens(): KitchenView[] {
   const snap = engine.getSnapshot();
@@ -246,6 +309,8 @@ export const useSimStore = create<SimUiState>((set, get) => ({
   kitchens: readKitchens(),
   runners: [],
   firstMileScale: engine.getSnapshot().firstMileScale,
+  scenario: null,
+  toasts: [],
   message: null,
   selection: { dockId: defaultMap.docks[0].id, stationId: defaultMap.stations[0].id },
   preview: null,
@@ -307,8 +372,36 @@ export const useSimStore = create<SimUiState>((set, get) => ({
     engine.dispatch({ type: 'SET_FIRST_MILE_SCALE', scale });
     get().publish();
   },
+  runScenario: (presetId) => {
+    const p = SCENARIOS.find((x) => x.id === presetId);
+    if (!p) return { ok: false, text: `없는 시나리오: ${presetId}` };
+    const r = engine.dispatch({ type: 'FLY_MISSION', fromDockId: p.fromDockId, toStationId: p.toStationId });
+    if (!r.ok || !r.droneId) {
+      const text = r.ok ? '드론을 띄우지 못했습니다' : r.reason;
+      set({ message: { text, ok: false } });
+      return { ok: false, text };
+    }
+    const snap = engine.getSnapshot();
+    // 1배속은 결과까지 몇 분 걸리고 20배속은 반응을 놓치므로 5배속으로 맞춘다
+    if (runner.speed !== 5) get().setSpeed(5);
+    if (runner.paused) get().togglePause();
+    set({
+      scenario: {
+        presetId,
+        droneId: r.droneId,
+        stage: 'LAUNCHING',
+        startedAt: snap.time,
+        policyLabel: snap.policies[p.kind],
+        before: { ...snap.safety },
+      },
+    });
+    get().publish();
+    return { ok: true, droneId: r.droneId };
+  },
+  dismissToast: (key) => set((s) => ({ toasts: s.toasts.filter((t) => t.key !== key) })),
   publish: () => {
     const snap = engine.getSnapshot();
+    tickScenario(get().scenario, snap, (scenario) => set({ scenario }));
     const log = snap.phaseLog;
     set((s) => ({
       time: snap.time,
@@ -337,6 +430,7 @@ export const useSimStore = create<SimUiState>((set, get) => ({
         end: r.endStep * defaultConfig.time.fixedDtSec,
       })),
       firstMileScale: snap.firstMileScale,
+      toasts: nextToasts(s.toasts, s.hazardLog, snap.hazardLog),
     }));
   },
 }));

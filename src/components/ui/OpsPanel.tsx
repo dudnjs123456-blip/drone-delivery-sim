@@ -5,9 +5,10 @@ import { defaultConfig } from '@/sim/config';
 import { defaultMap } from '@/sim/map/defaultMap';
 import { polygonCentroid } from '@/sim/util/geometry';
 import type { OrderStatus } from '@/sim/types';
-import { ORDER_SEGMENTS, type DroneView, useSimStore } from '@/store/simStore';
+import { ORDER_SEGMENTS, type DroneView, engine, useSimStore } from '@/store/simStore';
 import { useViewStore } from '@/store/viewStore';
 import { phaseColor, phaseLabel } from '../phase';
+import { runnerDisplayPos } from '../scenePos';
 import { DroneCard } from './DronePanel';
 import { HazardPanel } from './HazardPanel';
 
@@ -139,6 +140,18 @@ function StoresSection() {
   const setScale = useSimStore((s) => s.setFirstMileScale);
   const shelf = useSimStore((s) => s.orders.shelfByDock);
   const requestFocus = useViewStore((s) => s.requestFocus);
+  const track = useViewStore((s) => s.track);
+  const followRunnerId = useViewStore((s) => s.followRunnerId);
+  const followRunner = (storeId: string) => {
+    const r = engine.getSnapshot().runners.find((x) => x.storeId === storeId);
+    if (!r) return;
+    const st = defaultMap.stores.find((x) => x.id === storeId)!;
+    // 가게 정면 비스듬히 위에서 (건물 안으로 카메라가 들어가지 않게)
+    const b = defaultMap.buildings.find((x) => x.id === st.buildingId)!;
+    const [bx, by] = polygonCentroid(b.footprint);
+    const p = runnerDisplayPos(r).pos;
+    track({ kind: 'runner', id: r.id }, p.x, p.y, 60, { x: st.position.x - bx + 0.4 * (st.position.y - by), y: st.position.y - by });
+  };
 
   return (
     <Section
@@ -190,19 +203,35 @@ function StoresSection() {
                   {k.cooking.length}/{k.maxCooking}
                 </td>
                 <td className="text-center font-mono">{k.packing + k.ready}</td>
-                <td className="text-center text-[10px]">{moving ? `🧑 ${moving.carrying}개` : r.some((x) => x.phase === 'BACK') ? '복귀 중' : '대기'}</td>
+                <td className="text-center text-[10px]">
+                  <button
+                    onClick={() => followRunner(k.storeId)}
+                    className={`rounded px-1 ${r.some((x) => x.id === followRunnerId) ? 'bg-sky-600 text-white' : 'hover:bg-slate-100'}`}
+                    title="직원을 가까이 따라가기 (다음 운반도 계속 따라감)"
+                  >
+                    {moving ? `🧑 ${moving.carrying}개` : r.some((x) => x.phase === 'BACK') ? '복귀 중' : '대기'} 🎥
+                  </button>
+                </td>
               </tr>
             );
           })}
         </tbody>
       </table>
-      <div className="mt-1 flex gap-2 text-[10px] text-slate-500">
+      <div className="mt-1 flex flex-wrap gap-1.5 text-[10px] text-slate-500">
         {defaultMap.docks.map((d) => (
-          <span key={d.id}>
-            📦 {d.name} 선반 <b className="text-slate-700">{shelf[d.id] ?? 0}</b>
-          </span>
+          <button
+            key={d.id}
+            onClick={() => requestFocus(d.position.x, d.position.y, 75, { x: 0.3, y: -1 })}
+            className="rounded border border-slate-200 px-1.5 py-0.5 hover:bg-slate-100"
+            title="옥상 도크 가까이 보기 (선반 → 적재 → 이륙)"
+          >
+            🎥 {d.name} · 선반 <b className="text-slate-700">{shelf[d.id] ?? 0}</b>
+          </button>
         ))}
       </div>
+      <p className="mt-1 text-[10px] leading-snug text-slate-400">
+        🎥 를 누르면 카메라가 가까이 갑니다. 직원 따라가기는 1x 배속에서 보기 좋습니다.
+      </p>
     </Section>
   );
 }

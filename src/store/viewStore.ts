@@ -24,6 +24,8 @@ interface ViewState {
   focusRequest: { x: number; y: number; n: number; dist?: number; from?: { x: number; y: number } } | null;
   /** 카메라가 따라갈 드론 id */
   followDroneId: string | null;
+  /** 카메라가 따라갈 운반 직원 id */
+  followRunnerId: string | null;
   /** 패널에서 선택한 드론 (경로 상세 표시) */
   selectedDroneId: string | null;
   /** 1인칭으로 볼 드론 */
@@ -38,6 +40,9 @@ interface ViewState {
   /** dist 를 주면 그 거리까지 다가가고, from(ENU 방향)을 주면 그쪽에서 바라본다 */
   requestFocus: (x: number, y: number, dist?: number, from?: { x: number; y: number }) => void;
   setFollow: (id: string | null) => void;
+  /** (x, y) 로 dist 거리까지 다가간 뒤 그 대상을 따라간다 */
+  track: (target: { kind: 'drone' | 'runner'; id: string }, x: number, y: number, dist: number, from?: { x: number; y: number }) => void;
+  stopFollow: () => void;
   setSelected: (id: string | null) => void;
   enterFpv: (droneId: string) => void;
   exitFpv: () => void;
@@ -53,6 +58,7 @@ export const useViewStore = create<ViewState>((set) => ({
   camera: { x: 0, y: 0, targetX: 0, targetY: 0 },
   focusRequest: null,
   followDroneId: null,
+  followRunnerId: null,
   selectedDroneId: null,
   fpvDroneId: null,
   pickMode: null,
@@ -62,8 +68,19 @@ export const useViewStore = create<ViewState>((set) => ({
   toggleRawPath: () => set((s) => ({ showRawPath: !s.showRawPath })),
   setCamera: (camera) => set({ camera }),
   // 다른 곳으로 이동하면 따라가기를 끈다
-  requestFocus: (x, y, dist, from) => set((s) => ({ focusRequest: { x, y, dist, from, n: (s.focusRequest?.n ?? 0) + 1 }, followDroneId: null })),
-  setFollow: (followDroneId) => set((s) => ({ followDroneId, selectedDroneId: followDroneId ?? s.selectedDroneId })),
+  requestFocus: (x, y, dist, from) =>
+    set((s) => ({ focusRequest: { x, y, dist, from, n: (s.focusRequest?.n ?? 0) + 1 }, followDroneId: null, followRunnerId: null })),
+  setFollow: (followDroneId) => set((s) => ({ followDroneId, followRunnerId: null, selectedDroneId: followDroneId ?? s.selectedDroneId })),
+  track: (target, x, y, dist, from) =>
+    set((s) => ({
+      focusRequest: { x, y, dist, from, n: (s.focusRequest?.n ?? 0) + 1 },
+      followDroneId: target.kind === 'drone' ? target.id : null,
+      followRunnerId: target.kind === 'runner' ? target.id : null,
+      selectedDroneId: target.kind === 'drone' ? target.id : s.selectedDroneId,
+      viewMode: s.viewMode === 'FPV' ? s.prevMode : s.viewMode,
+      fpvDroneId: null,
+    })),
+  stopFollow: () => set({ followDroneId: null, followRunnerId: null }),
   setSelected: (selectedDroneId) => set({ selectedDroneId }),
   enterFpv: (fpvDroneId) =>
     set((s) => ({

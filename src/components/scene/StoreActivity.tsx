@@ -5,11 +5,12 @@ import { useMemo, useRef } from 'react';
 import * as THREE from 'three';
 import { defaultConfig } from '@/sim/config';
 import { defaultMap } from '@/sim/map/defaultMap';
-import { dockShelfPoint, pointAlongRunnerPath, runnerPath } from '@/sim/orders/firstMile';
+import { dockShelfPoint } from '@/sim/orders/firstMile';
 import { polygonCentroid } from '@/sim/util/geometry';
 import type { Vec3 } from '@/sim/types';
-import { engine, runner as simRunner, useSimStore } from '@/store/simStore';
+import { engine, useSimStore } from '@/store/simStore';
 import { setLabelAnchor } from '../labels/labels';
+import { droneDisplayPos, runnerDisplayPos, simTimeNow, storeRunnerPath } from '../scenePos';
 
 /** 사람·상자는 단지 규모에서 너무 작아 렌더링만 키운다 (드론과 같은 이유) */
 const PERSON_SCALE = 4;
@@ -77,20 +78,18 @@ function Kitchen({ storeId }: { storeId: string }) {
 function Runner({ id, storeId }: { id: string; storeId: string }) {
   const g = useRef<THREE.Group>(null);
   const boxes = useRef<THREE.Group>(null);
-  const path = useMemo(() => runnerPath(defaultMap, defaultMap.stores.find((s) => s.id === storeId)!), [storeId]);
   const tint = useMemo(() => ['#2563eb', '#16a34a', '#9333ea', '#0891b2'][defaultMap.stores.findIndex((s) => s.id === storeId) % 4], [storeId]);
   const last = useRef(new THREE.Vector3());
 
-  useFrame(() => {
+  const body = useRef<THREE.Group>(null);
+  useFrame(({ clock }) => {
     const r = engine.getSnapshot().runners.find((x) => x.id === id);
     if (!r || !g.current) return;
-    const dt = defaultConfig.time.fixedDtSec;
-    // 50ms 스텝 사이도 부드럽게: 엔진 시각 + 보간 비율
-    const step = engine.getSnapshot().time / dt + simRunner.alpha;
-    const span = Math.max(1, r.endStep - r.startStep);
-    const f = r.phase === 'IDLE' ? 0 : Math.min(1, Math.max(0, (step - r.startStep) / span));
-    const p = pointAlongRunnerPath(path, r.phase === 'BACK' ? 1 - f : f);
+    const { pos: p, moving } = runnerDisplayPos(r);
     g.current.position.set(p.x, p.z, -p.y);
+    // 걸을 때만 몸을 위아래로 흔든다 (엘리베이터 안에서는 가만히)
+    const inLift = Math.abs(p.z - last.current.y) > 0.001;
+    if (body.current) body.current.position.y = moving && !inLift ? Math.abs(Math.sin(clock.elapsedTime * 9)) * 0.12 : 0;
     // 진행 방향을 바라본다
     const dx = p.x - last.current.x;
     const dz = -p.y - last.current.z;
@@ -106,6 +105,7 @@ function Runner({ id, storeId }: { id: string; storeId: string }) {
 
   return (
     <group ref={g} scale={PERSON_SCALE}>
+      <group ref={body}>
       <mesh position={[0, 0.55, 0]} castShadow>
         <capsuleGeometry args={[0.22, 0.6, 4, 10]} />
         <meshStandardMaterial color={tint} />
@@ -123,7 +123,94 @@ function Runner({ id, storeId }: { id: string; storeId: string }) {
           </mesh>
         ))}
       </group>
+      </group>
     </group>
+  );
+}
+
+/** 운반 경로의 엘리베이터 (수직 구간) 를 유리 통로로 보여 준다 */
+function elevatorSegment(storeId: string): { at: Vec3; h: number } | null {
+  // 경로는 storeRunnerPath 가 캐시하므로 매번 불러도 싸다
+  const p = storeRunnerPath(storeId);
+  for (let i = 0; i + 1 < p.length; i++) if (Math.abs(p[i + 1].z - p[i].z) > 1) return { at: p[i], h: p[i + 1].z - p[i].z };
+  return null;
+}
+
+function Elevator({ storeId }: { storeId: string }) {
+  const seg = elevatorSegment(storeId);
+  if (!seg) return null;
+  return (
+    <group position={[seg.at.x, seg.h / 2, -seg.at.y]}>
+      <mesh>
+        <boxGeometry args={[4, seg.h, 4]} />
+        <meshStandardMaterial color="#67e8f9" transparent opacity={0.28} depthWrite={false} />
+      </mesh>
+      <mesh position={[0, seg.h / 2 + 0.4, 0]}>
+        <boxGeometry args={[4.6, 0.8, 4.6]} />
+        <meshStandardMaterial color="#0e7490" />
+      </mesh>
+    </group>
+  );
+}
+
+/**
+ * 적재 연출: 선반 화물이 패드의 드론으로 옮겨지고(앞 60%), 패드에 진행 고리가 찬다.
+ * 적재 구간 = 출발 시각 - 적재 시간 ~ 출발 시각.
+ */
+function LoadingFx({ droneId, dockId, departAt }: { droneId: string; dockId: string; departAt: number }) {
+  const box = useRef<THREE.Mesh>(null);
+  const ring = useRef<THREE.Mesh>(null);
+  const shelf = useMemo(() => dockShelfPoint(defaultMap, defaultMap.docks.find((d) => d.id === dockId)!), [dockId]);
+  const tmp = useMemo(() => ({ x: 0, y: 0, z: 0 }) as Vec3, []);
+  const loadSec = defaultConfig.kitchen.loadSec;
+  useFrame(() => {
+    const d = engine.getSnapshot().drones.find((x) => x.id === droneId);
+    if (!d || !box.current || !ring.current) return;
+    const f = Math.min(1, Math.max(0, 1 - (departAt - simTimeNow()) / loadSec));
+    const pad = d.taxi?.to ?? droneDisplayPos(d, tmp);
+    // 화물: 선반 → 패드 위로 포물선
+    const k = Math.min(1, f / 0.6);
+    const x = shelf.x + (pad.x - shelf.x) * k;
+    const y = shelf.y + (pad.y - shelf.y) * k;
+    const z = pad.z + 2 + Math.sin(k * Math.PI) * 6;
+    box.current.position.set(x, z, -y);
+    box.current.visible = k < 1;
+    // 진행 고리
+    ring.current.position.set(pad.x, pad.z + 0.6, -pad.y);
+    ring.current.scale.set(1, 1, 1);
+    const g = ring.current.geometry as THREE.RingGeometry;
+    const want = Math.max(0.02, f) * Math.PI * 2;
+    if (Math.abs((g.parameters?.thetaLength ?? 0) - want) > 0.05) {
+      ring.current.geometry.dispose();
+      ring.current.geometry = new THREE.RingGeometry(6, 7.4, 48, 1, Math.PI / 2, want);
+    }
+  });
+  return (
+    <>
+      <mesh ref={box} castShadow>
+        <boxGeometry args={[BOX * 1.3, BOX * 1.1, BOX * 1.3]} />
+        <meshStandardMaterial color="#d97706" emissive="#d97706" emissiveIntensity={0.3} />
+      </mesh>
+      <mesh ref={ring} rotation={[-Math.PI / 2, 0, 0]}>
+        <ringGeometry args={[6, 7.4, 48, 1, Math.PI / 2, 0.1]} />
+        <meshBasicMaterial color="#7c3aed" side={THREE.DoubleSide} />
+      </mesh>
+    </>
+  );
+}
+
+function LoadingAll() {
+  const drones = useSimStore((s) => s.drones);
+  const time = useSimStore((s) => s.time);
+  const loadSec = defaultConfig.kitchen.loadSec;
+  return (
+    <>
+      {drones
+        .filter((d) => d.departAt !== null && time >= d.departAt - loadSec && time < d.departAt)
+        .map((d) => (
+          <LoadingFx key={`${d.id}-${d.departAt}`} droneId={d.id} dockId={d.homeDockId} departAt={d.departAt!} />
+        ))}
+    </>
   );
 }
 
@@ -165,6 +252,10 @@ export function StoreActivity() {
       {defaultMap.docks.map((d) => (
         <DockShelf key={d.id} dockId={d.id} />
       ))}
+      {defaultMap.stores.map((s) => (
+        <Elevator key={`lift-${s.id}`} storeId={s.id} />
+      ))}
+      <LoadingAll />
     </>
   );
 }

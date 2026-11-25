@@ -3,11 +3,12 @@
 import { useState } from 'react';
 import { defaultMap } from '@/sim/map/defaultMap';
 import type { HazardKind, HazardSpec, HazardState, ResponsePolicies } from '@/sim/hazards/types';
-import type { Vec3 } from '@/sim/types';
-import { type DroneView, useSimStore } from '@/store/simStore';
+import { pointAhead } from '@/sim/hazards/geometry';
+import { useSimStore } from '@/store/simStore';
 import { useViewStore } from '@/store/viewStore';
 import { HAZARD_CATALOG, HAZARD_KINDS } from '../hazardCatalog';
 import { isAirborne } from '../phase';
+import { ScenarioPanel } from './ScenarioPanel';
 import { formatClock } from './SimControls';
 
 const field = 'w-full rounded border border-slate-200 bg-white px-1.5 py-0.5 text-xs text-slate-800';
@@ -46,22 +47,6 @@ function Num({
   );
 }
 
-/** 드론 남은 경로를 따라 dist(수평) 앞의 점. 경로가 없으면 진행 방향으로 */
-function pointAhead(d: DroneView, dist: number): { x: number; y: number } {
-  const pts: Vec3[] = [d.position, ...d.path.slice(Math.max(1, d.pathIndex))];
-  let left = dist;
-  for (let i = 0; i + 1 < pts.length; i++) {
-    const a = pts[i];
-    const b = pts[i + 1];
-    const seg = Math.hypot(b.x - a.x, b.y - a.y);
-    if (seg >= left && seg > 0) {
-      const t = left / seg;
-      return { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t };
-    }
-    left -= seg;
-  }
-  return { x: d.position.x + Math.sin(d.headingRad) * dist, y: d.position.y + Math.cos(d.headingRad) * dist };
-}
 
 type LocMode = 'ahead' | 'picked' | 'center';
 
@@ -168,6 +153,11 @@ function InjectSection() {
         </div>
       </div>
 
+      {needsLoc && loc === 'ahead' && !refDrone && (
+        <div className="rounded border border-amber-300 bg-amber-50 px-2 py-1.5 text-[11px] text-amber-900">
+          지금 비행 중인 드론이 없어 「드론 전방」에 넣을 수 없습니다. 위의 <b>원클릭 시나리오</b>를 쓰거나, 아래 시험 비행을 띄운 뒤 넣으세요.
+        </div>
+      )}
       {needsLoc && (
         <div className="space-y-1">
           <div className="flex gap-1 text-[11px]">
@@ -296,7 +286,11 @@ function InjectSection() {
             <span className="text-slate-500">초 뒤 (T={formatClock(time + delay)})</span>
           </>
         )}
-        <button onClick={submit} className="ml-auto rounded-md bg-rose-600 px-3 py-1 text-xs font-semibold text-white hover:bg-rose-500">
+        <button
+          onClick={submit}
+          disabled={needsLoc && loc === 'ahead' && !refDrone}
+          className="ml-auto rounded-md bg-rose-600 px-3 py-1 text-xs font-semibold text-white hover:bg-rose-500 disabled:cursor-not-allowed disabled:opacity-40"
+        >
           ⚡ 주입
         </button>
       </div>
@@ -313,8 +307,7 @@ function PolicySection() {
   const [open, setOpen] = useState<HazardKind | null>(null);
 
   return (
-    <section className="space-y-1.5 border-t border-slate-200 pt-2">
-      <h2 className="text-xs font-bold text-slate-800">대응 정책</h2>
+    <section className="space-y-1.5 pt-2">
       {HAZARD_KINDS.map((k) => {
         const info = HAZARD_CATALOG[k];
         const current = policies[k];
@@ -471,10 +464,19 @@ function SafetySection() {
 
 export function HazardPanel() {
   return (
-    <div className="space-y-2">
-      <InjectSection />
+    <div className="space-y-3">
+      <ScenarioPanel />
       <HazardList />
-      <PolicySection />
+      <details className="rounded-lg border border-slate-200 p-2 [&_summary]:cursor-pointer">
+        <summary className="text-xs font-bold text-slate-800">🛠 직접 주입 (종류·위치·시점 지정)</summary>
+        <div className="pt-2">
+          <InjectSection />
+        </div>
+      </details>
+      <details className="rounded-lg border border-slate-200 p-2">
+        <summary className="cursor-pointer text-xs font-bold text-slate-800">⚙ 모든 대응 정책 · 센서 설정</summary>
+        <PolicySection />
+      </details>
       <SafetySection />
     </div>
   );

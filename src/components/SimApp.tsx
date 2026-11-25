@@ -12,6 +12,8 @@ import { LabelLayer } from './labels/LabelLayer';
 import { phaseColor, phaseLabel } from './phase';
 import { HAZARD_CATALOG } from './hazardCatalog';
 import { enuToThree } from './coords';
+import { EventToasts } from './ui/EventToasts';
+import { FollowChip } from './ui/FollowChip';
 import { FpvHud } from './ui/FpvHud';
 import { MapLegend } from './ui/MapLegend';
 import { Minimap } from './ui/Minimap';
@@ -127,6 +129,8 @@ export default function SimApp() {
       </div>
       <LabelLayer labels={labels} visible={showLabels} />
       {viewMode === 'FPV' && <FpvHud />}
+      <EventToasts />
+      <FollowChip />
       <div className="pointer-events-none absolute inset-0 z-10">
         {viewMode !== 'FPV' && (
           <div className="pointer-events-auto absolute left-4 top-4">
