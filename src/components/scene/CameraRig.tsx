@@ -26,6 +26,7 @@ const FPV_PITCH = -0.12;
 /** 기체 중심에서 카메라까지 (m): 위로, 앞으로 */
 const FPV_UP = 0.6;
 const FPV_FORWARD = 1.5;
+const FLY_FOV = 60;
 
 /** 시야각·근평면 변경 (훅이 준 카메라 객체를 직접 고치지 않도록 함수로 분리) */
 function setLens(cam: THREE.Camera, fov: number, near: number) {
@@ -51,6 +52,17 @@ export function CameraRig({ map }: { map: MapData }) {
   const prevMode = useRef<ViewMode>(viewMode);
   /** 1인칭: 부드럽게 따라가는 방위 + 마우스로 둘러본 오프셋 */
   const fpv = useRef({ yaw: 0, init: false, lookYaw: 0, lookPitch: 0 });
+  /** 자유 비행: 바라보는 방향과 눌린 키 */
+  const fly = useRef({ yaw: 0, pitch: 0, keys: new Set<string>() });
+  const pivotRequest = useViewStore((s) => s.pivotRequest);
+
+  // 궤도 모드에서도 방향키로 화면 이동
+  useEffect(() => {
+    const c = controls.current;
+    if (!c) return;
+    c.listenToKeyEvents(window as unknown as HTMLElement);
+    return () => c.stopListenToKeyEvents();
+  }, []);
 
   const cx = (map.bounds.minX + map.bounds.maxX) / 2;
   const cy = (map.bounds.minY + map.bounds.maxY) / 2;
@@ -63,6 +75,26 @@ export function CameraRig({ map }: { map: MapData }) {
     if (!c) return;
     const from = prevMode.current;
     prevMode.current = viewMode;
+    if (viewMode === 'FLY') {
+      // 지금 보던 방향 그대로 자유 비행 시작
+      c.enabled = false;
+      anim.current = null;
+      tmp.look.set(0, 0, -1).applyQuaternion(camera.quaternion);
+      fly.current.yaw = Math.atan2(tmp.look.x, -tmp.look.z);
+      fly.current.pitch = Math.asin(Math.max(-1, Math.min(1, tmp.look.y)));
+      setLens(camera, FLY_FOV, 0.3);
+      return;
+    }
+    if (from === 'FLY' && viewMode === '3D') {
+      // 자유 비행을 마치면 그 자리에서 앞쪽 80m 를 중심으로 궤도 회전
+      c.enabled = true;
+      setLens(camera, ORBIT_FOV, 1);
+      tmp.look.set(0, 0, -1).applyQuaternion(camera.quaternion);
+      c.target.copy(camera.position).addScaledVector(tmp.look, 80);
+      c.enableRotate = true;
+      c.update();
+      return;
+    }
     if (viewMode === 'FPV') {
       c.enabled = false;
       anim.current = null;
@@ -95,6 +127,75 @@ export function CameraRig({ map }: { map: MapData }) {
       c.enableRotate = true;
     }
   }, [viewMode, cx, cy, camera, tmp]);
+
+  // 자유 비행: W/A/S/D 이동, Q/E 아래·위, Shift 빠르게, 드래그 둘러보기, 휠 속도, Esc 끝
+  useEffect(() => {
+    if (viewMode !== 'FLY') return;
+    const el = gl.domElement;
+    const keys = fly.current.keys;
+    const typing = (e: KeyboardEvent) => ['INPUT', 'SELECT', 'TEXTAREA'].includes((e.target as HTMLElement).tagName);
+    const kd = (e: KeyboardEvent) => {
+      if (typing(e)) return;
+      if (e.key === 'Escape') {
+        useViewStore.getState().setViewMode('3D');
+        return;
+      }
+      keys.add(e.code);
+      if (['KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyQ', 'KeyE', 'Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.code)) e.preventDefault();
+    };
+    const ku = (e: KeyboardEvent) => keys.delete(e.code);
+    let drag: { x: number; y: number } | null = null;
+    const down = (e: PointerEvent) => {
+      drag = { x: e.clientX, y: e.clientY };
+    };
+    const move = (e: PointerEvent) => {
+      if (!drag) return;
+      const f = fly.current;
+      f.yaw += (e.clientX - drag.x) * 0.0035;
+      f.pitch = Math.max(-1.5, Math.min(1.5, f.pitch - (e.clientY - drag.y) * 0.0035));
+      drag = { x: e.clientX, y: e.clientY };
+    };
+    const up = () => {
+      drag = null;
+    };
+    const wheel = (e: WheelEvent) => {
+      e.preventDefault();
+      const v = useViewStore.getState();
+      v.setFlySpeed(v.flySpeed * (e.deltaY < 0 ? 1.25 : 0.8));
+    };
+    const blur = () => keys.clear();
+    window.addEventListener('keydown', kd);
+    window.addEventListener('keyup', ku);
+    window.addEventListener('blur', blur);
+    el.addEventListener('pointerdown', down);
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+    el.addEventListener('wheel', wheel, { passive: false });
+    return () => {
+      window.removeEventListener('keydown', kd);
+      window.removeEventListener('keyup', ku);
+      window.removeEventListener('blur', blur);
+      el.removeEventListener('pointerdown', down);
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+      el.removeEventListener('wheel', wheel);
+      keys.clear();
+    };
+  }, [viewMode, gl]);
+
+  // 더블클릭한 지점을 회전 중심으로 (카메라는 그 자리, 중심만 옮긴다)
+  useEffect(() => {
+    const c = controls.current;
+    if (!c || !pivotRequest) return;
+    const mode = useViewStore.getState().viewMode;
+    if (mode === 'FPV' || mode === 'FLY') return;
+    const t = new THREE.Vector3(...enuToThree(pivotRequest.x, pivotRequest.y, pivotRequest.z));
+    // 너무 멀면 그 지점 쪽으로 조금 다가간다
+    const pos = camera.position.clone();
+    const d = pos.distanceTo(t);
+    if (d > 400) pos.lerp(t, 1 - 300 / d);
+    anim.current = { position: pos, target: t };
+  }, [pivotRequest, camera]);
 
   // 1인칭: 드래그로 둘러보기, 더블클릭으로 정면
   useEffect(() => {
@@ -154,7 +255,24 @@ export function CameraRig({ map }: { map: MapData }) {
     if (!c) return;
     const view = useViewStore.getState();
 
-    if (view.viewMode === 'FPV') {
+    if (view.viewMode === 'FLY') {
+      const f = fly.current;
+      const k = f.keys;
+      const fwd = tmp.look.set(Math.sin(f.yaw) * Math.cos(f.pitch), Math.sin(f.pitch), -Math.cos(f.yaw) * Math.cos(f.pitch));
+      const right = tmp.v.set(Math.cos(f.yaw), 0, Math.sin(f.yaw));
+      const sp = view.flySpeed * (k.has('ShiftLeft') || k.has('ShiftRight') ? 4 : 1) * Math.min(delta, 0.1);
+      const mv = new THREE.Vector3();
+      if (k.has('KeyW') || k.has('ArrowUp')) mv.add(fwd);
+      if (k.has('KeyS') || k.has('ArrowDown')) mv.sub(fwd);
+      if (k.has('KeyD') || k.has('ArrowRight')) mv.add(right);
+      if (k.has('KeyA') || k.has('ArrowLeft')) mv.sub(right);
+      if (k.has('KeyE') || k.has('Space')) mv.y += 1;
+      if (k.has('KeyQ') || k.has('ControlLeft')) mv.y -= 1;
+      if (mv.lengthSq() > 0) camera.position.addScaledVector(mv.normalize(), sp);
+      // 땅속으로는 들어가지 않는다
+      camera.position.setY(Math.max(0.8, camera.position.y));
+      camera.lookAt(camera.position.x + fwd.x, camera.position.y + fwd.y, camera.position.z + fwd.z);
+    } else if (view.viewMode === 'FPV') {
       const d = engine.getSnapshot().drones.find((x) => x.id === view.fpvDroneId);
       if (d) {
         const p = droneDisplayPos(d, tmp.p);
@@ -216,7 +334,7 @@ export function CameraRig({ map }: { map: MapData }) {
       reportAcc.current = 0;
       const p = threeToEnu(camera.position.x, camera.position.y, camera.position.z);
       let t: { x: number; y: number };
-      if (view.viewMode === 'FPV') {
+      if (view.viewMode === 'FPV' || view.viewMode === 'FLY') {
         tmp.look.set(0, 0, -1).applyQuaternion(camera.quaternion);
         t = { x: p.x + tmp.look.x * 80, y: p.y - tmp.look.z * 80 };
       } else t = threeToEnu(c.target.x, c.target.y, c.target.z);
@@ -234,9 +352,13 @@ export function CameraRig({ map }: { map: MapData }) {
       target={initialTarget}
       enableDamping
       dampingFactor={0.12}
-      minDistance={20}
-      maxDistance={1500}
-      maxPolarAngle={Math.PI / 2 - 0.05}
+      // 제약을 넓게: 아주 가까이(2m)~멀리(4km), 아래에서 올려다보는 각도까지
+      minDistance={2}
+      maxDistance={4000}
+      maxPolarAngle={Math.PI - 0.05}
+      zoomToCursor
+      screenSpacePanning
+      keyPanSpeed={25}
       // 사용자가 조작을 시작하면 진행 중인 전환 애니메이션을 멈춘다
       onStart={() => {
         anim.current = null;

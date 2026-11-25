@@ -136,6 +136,26 @@ export interface Drone {
   /** 돌발 상황으로 버린 원래 경로 (화면에 잠시 보여 준다) */
   ghostPath: Vec3[] | null;
   ghostUntil: number | null;
+  /** 비행 중 받는 바람 영향 (지상에서는 null) */
+  weather: DroneWeatherEffect | null;
+}
+
+export interface DroneWeatherEffect {
+  /** 기체 위치의 바람 벡터와 크기 (m/s) */
+  wind: Vec3;
+  windMs: number;
+  /** 진행 방향 기준 맞바람(+)/뒷바람(-), 옆바람 크기 (m/s) */
+  headwindMs: number;
+  crosswindMs: number;
+  /** 지면 속도, 대기 속도 (수평, m/s) */
+  groundSpeedMs: number;
+  airSpeedMs: number;
+  /** 배터리 소모 배율 (무풍·맑음 = 1) */
+  drainMult: number;
+  /** 계획 경로에서 벗어난 거리 (수평, m) */
+  crossTrackM: number;
+  /** 빌딩풍 구역 안인지 */
+  inWake: boolean;
 }
 
 export interface RouteInfo {

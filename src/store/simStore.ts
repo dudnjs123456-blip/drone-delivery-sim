@@ -15,7 +15,8 @@ import { type PlanResult, PathPlanner } from '@/sim/pathfinding/planner';
 import type { HazardLogEntry, HazardSettings, HazardSpec, HazardState, ResponsePolicies, SafetyStats } from '@/sim/hazards/types';
 import { kitchenProfile } from '@/sim/orders/firstMile';
 import { SCENARIOS, type ScenarioRun, scenarioResult } from './scenarios';
-import type { FlightPhase, Order, OrderStatus, RouteInfo, Vec3 } from '@/sim/types';
+import type { DroneWeatherEffect, FlightPhase, Order, OrderStatus, RouteInfo, Vec3 } from '@/sim/types';
+import type { WeatherSnapshot, WeatherState } from '@/sim/wind/weather';
 
 export const engine: SimEngine = new LocalSimEngine();
 engine.load(defaultMap, defaultConfig, 1);
@@ -68,6 +69,7 @@ export interface DroneView {
   taxi: { from: Vec3; to: Vec3; start: number; end: number } | null;
   ghostPath: Vec3[] | null;
   ghostUntil: number | null;
+  weather: DroneWeatherEffect | null;
 }
 
 export interface Toast {
@@ -153,6 +155,7 @@ interface SimUiState {
   firstMileScale: number;
   scenario: ScenarioRun | null;
   toasts: Toast[];
+  weather: WeatherSnapshot;
   message: { text: string; ok: boolean } | null;
   selection: { dockId: string; stationId: string };
   preview: RoutePreview | null;
@@ -172,6 +175,10 @@ interface SimUiState {
   /** 원클릭 시나리오 시작. 띄운 드론 id 를 돌려준다 */
   runScenario: (presetId: string) => { ok: true; droneId: string } | { ok: false; text: string };
   dismissToast: (key: number) => void;
+  setWeather: (w: Partial<WeatherState>, rampSec?: number) => void;
+  setWeatherAuto: (on: boolean) => void;
+  scheduleWeather: (inSec: number, w: WeatherState, label: string) => void;
+  cancelWeather: (id: string) => void;
   publish: () => void;
 }
 
@@ -197,6 +204,7 @@ function readDrones(): DroneView[] {
     taxi: d.taxi,
     ghostPath: d.ghostPath,
     ghostUntil: d.ghostUntil,
+    weather: d.weather ? { ...d.weather } : null,
   }));
 }
 
@@ -311,6 +319,7 @@ export const useSimStore = create<SimUiState>((set, get) => ({
   firstMileScale: engine.getSnapshot().firstMileScale,
   scenario: null,
   toasts: [],
+  weather: engine.getSnapshot().weather,
   message: null,
   selection: { dockId: defaultMap.docks[0].id, stationId: defaultMap.stations[0].id },
   preview: null,
@@ -399,6 +408,22 @@ export const useSimStore = create<SimUiState>((set, get) => ({
     return { ok: true, droneId: r.droneId };
   },
   dismissToast: (key) => set((s) => ({ toasts: s.toasts.filter((t) => t.key !== key) })),
+  setWeather: (weather, rampSec) => {
+    engine.dispatch({ type: 'SET_WEATHER', weather, rampSec });
+    get().publish();
+  },
+  setWeatherAuto: (on) => {
+    engine.dispatch({ type: 'SET_WEATHER_AUTO', on });
+    get().publish();
+  },
+  scheduleWeather: (inSec, weather, label) => {
+    engine.dispatch({ type: 'SCHEDULE_WEATHER', at: engine.getSnapshot().time + inSec, weather, label });
+    get().publish();
+  },
+  cancelWeather: (id) => {
+    engine.dispatch({ type: 'CANCEL_WEATHER', id });
+    get().publish();
+  },
   publish: () => {
     const snap = engine.getSnapshot();
     tickScenario(get().scenario, snap, (scenario) => set({ scenario }));
@@ -431,6 +456,7 @@ export const useSimStore = create<SimUiState>((set, get) => ({
       })),
       firstMileScale: snap.firstMileScale,
       toasts: nextToasts(s.toasts, s.hazardLog, snap.hazardLog),
+      weather: { ...snap.weather, forecasts: [...snap.weather.forecasts] },
     }));
   },
 }));

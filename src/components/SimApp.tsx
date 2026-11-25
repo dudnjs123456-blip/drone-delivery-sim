@@ -12,6 +12,7 @@ import { LabelLayer } from './labels/LabelLayer';
 import { phaseColor, phaseLabel } from './phase';
 import { HAZARD_CATALOG } from './hazardCatalog';
 import { enuToThree } from './coords';
+import { CameraHelp } from './ui/CameraHelp';
 import { EventToasts } from './ui/EventToasts';
 import { FollowChip } from './ui/FollowChip';
 import { FpvHud } from './ui/FpvHud';
@@ -131,6 +132,7 @@ export default function SimApp() {
       {viewMode === 'FPV' && <FpvHud />}
       <EventToasts />
       <FollowChip />
+      <CameraHelp />
       <div className="pointer-events-none absolute inset-0 z-10">
         {viewMode !== 'FPV' && (
           <div className="pointer-events-auto absolute left-4 top-4">

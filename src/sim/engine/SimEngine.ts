@@ -6,6 +6,7 @@
 import type { SimConfig } from '../config';
 import type { HazardLogEntry, HazardSettings, HazardSpec, HazardState, ResponsePolicies, SafetyStats } from '../hazards/types';
 import type { KitchenState, RunnerState } from '../orders/firstMile';
+import type { WeatherSnapshot, WeatherState } from '../wind/weather';
 import type { Drone, FlightPhase, MapData, Order, WindState } from '../types';
 
 export type SimCommand =
@@ -13,7 +14,13 @@ export type SimCommand =
   | { type: 'FLY_MISSION'; fromDockId: string; toStationId: string; droneId?: string; payloadKg?: number }
   | { type: 'CREATE_ORDER'; storeId?: string; destBuildingId?: string }
   | { type: 'SET_PEAK_MODE'; ordersPerMin: number | null }
-  | { type: 'SET_WIND'; fromDirRad: number; meanSpeed: number; gustiness: number }
+  /** 날씨 바꾸기 (rampSec 동안 서서히) */
+  | { type: 'SET_WEATHER'; weather: Partial<WeatherState>; rampSec?: number }
+  /** 날씨 자동 변화 (바람이 조금씩 바뀐다) */
+  | { type: 'SET_WEATHER_AUTO'; on: boolean }
+  /** 예보: at(절대 시각)에 그 날씨로 바뀐다 */
+  | { type: 'SCHEDULE_WEATHER'; at: number; weather: WeatherState; label: string }
+  | { type: 'CANCEL_WEATHER'; id: string }
   /** 시간-공간 예약 테이블 사용 여부 (끄면 충돌 회피 없이 바로 출발 — 비교용) */
   | { type: 'SET_RESERVATIONS'; enabled: boolean }
   /** 돌발 상황 주입. atSec(절대 시뮬레이션 시각)이 없으면 즉시 */
@@ -26,7 +33,7 @@ export type SimCommand =
   | { type: 'SET_FIRST_MILE_SCALE'; scale: number };
 
 export type DispatchResult =
-  | { ok: true; droneId?: string; orderId?: string; hazardId?: string }
+  | { ok: true; droneId?: string; orderId?: string; hazardId?: string; forecastId?: string }
   | { ok: false; reason: string };
 
 export interface TrafficStats {
@@ -44,6 +51,8 @@ export interface TrafficStats {
   altitudeShiftRatio: number;
   /** 드론 배정을 기다리는 주문 수 */
   queuedOrders: number;
+  /** 비행 중 근접 회피로 잠깐 멈춘 횟수 */
+  tacticalHolds: number;
 }
 
 export interface PhaseChange {
@@ -84,6 +93,7 @@ export interface SimSnapshot {
   /** 가게 → 도크 운반 직원 */
   runners: readonly RunnerState[];
   firstMileScale: number;
+  weather: WeatherSnapshot;
 }
 
 export interface SimEngine {

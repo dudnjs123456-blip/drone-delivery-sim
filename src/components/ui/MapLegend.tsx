@@ -1,6 +1,7 @@
 import { palette } from '@/components/scene/palette';
 import { defaultConfig } from '@/sim/config';
 import type { MapData } from '@/sim/types';
+import { WeatherLine } from './WeatherLine';
 
 export function MapLegend({ map }: { map: MapData }) {
   const apts = map.buildings.filter((b) => b.kind === 'APARTMENT');
@@ -19,7 +20,10 @@ export function MapLegend({ map }: { map: MapData }) {
   return (
     <div className="w-64 rounded-lg bg-white/90 p-3 text-sm shadow-lg backdrop-blur">
       <h1 className="text-base font-bold text-slate-900">드론 배송 시뮬레이터</h1>
-      <p className="mb-2 text-xs text-slate-500">{map.name} · M4+ 다중 드론 · 돌발 상황</p>
+      <p className="mb-1 text-xs text-slate-500">{map.name} · M5 날씨·바람</p>
+      <div className="mb-2 rounded bg-slate-50 px-1.5 py-1">
+        <WeatherLine />
+      </div>
       <ul className="space-y-1">
         {items.map((it) => (
           <li key={it.label} className="flex items-center gap-2 text-slate-700">

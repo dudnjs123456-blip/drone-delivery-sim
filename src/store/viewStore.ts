@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 
-/** 3D: 자유 궤도, TOP: 상단, FPV: 선택한 드론 1인칭 */
-export type ViewMode = '3D' | 'TOP' | 'FPV';
+/** 3D: 궤도(한 점을 중심으로 회전), TOP: 상단, FLY: 자유 비행 카메라, FPV: 선택한 드론 1인칭 */
+export type ViewMode = '3D' | 'TOP' | 'FLY' | 'FPV';
 
 interface CameraInfo {
   /** 카메라 위치 (ENU, m) */
@@ -33,6 +33,18 @@ interface ViewState {
   /** 미니맵 클릭으로 위치를 고르는 중이면 그 용도 */
   pickMode: 'hazard' | null;
   pickedPoint: { x: number; y: number } | null;
+  /** 더블클릭한 지점을 궤도 회전 중심으로 (ENU) */
+  pivotRequest: { x: number; y: number; z: number; n: number } | null;
+  /** 자유 비행 속도 (m/s) */
+  flySpeed: number;
+  /** 바람 화살표·입자·빌딩풍 표시 */
+  showWind: boolean;
+  /** 바람 화살표를 그릴 고도 (m) */
+  windAlt: number;
+  toggleWind: () => void;
+  setWindAlt: (z: number) => void;
+  requestPivot: (p: { x: number; y: number; z: number }) => void;
+  setFlySpeed: (v: number) => void;
   setViewMode: (m: Exclude<ViewMode, 'FPV'>) => void;
   toggleLabels: () => void;
   toggleRawPath: () => void;
@@ -63,6 +75,14 @@ export const useViewStore = create<ViewState>((set) => ({
   fpvDroneId: null,
   pickMode: null,
   pickedPoint: null,
+  pivotRequest: null,
+  flySpeed: 40,
+  showWind: true,
+  windAlt: 60,
+  toggleWind: () => set((s) => ({ showWind: !s.showWind })),
+  setWindAlt: (windAlt) => set({ windAlt }),
+  requestPivot: (p) => set((s) => ({ pivotRequest: { ...p, n: (s.pivotRequest?.n ?? 0) + 1 }, followDroneId: null, followRunnerId: null })),
+  setFlySpeed: (flySpeed) => set({ flySpeed: Math.min(400, Math.max(2, flySpeed)) }),
   setViewMode: (viewMode) => set({ viewMode, prevMode: viewMode, fpvDroneId: null }),
   toggleLabels: () => set((s) => ({ showLabels: !s.showLabels })),
   toggleRawPath: () => set((s) => ({ showRawPath: !s.showRawPath })),

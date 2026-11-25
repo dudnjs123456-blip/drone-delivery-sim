@@ -4,7 +4,8 @@ import { Grid } from '@react-three/drei';
 import { Canvas } from '@react-three/fiber';
 import { defaultMap } from '@/sim/map/defaultMap';
 import { LabelProjector } from '../labels/LabelProjector';
-import { enuToThree } from '../coords';
+import { useViewStore } from '@/store/viewStore';
+import { enuToThree, threeToEnu } from '../coords';
 import { Buildings } from './Buildings';
 import { CameraRig } from './CameraRig';
 import { DronePaths } from './DronePaths';
@@ -15,6 +16,7 @@ import { Drones } from './Drones';
 import { Docks, NoFlyZones, Stations, Stores } from './Facilities';
 import { palette } from './palette';
 import { SimDriver } from './SimDriver';
+import { WindLayer } from './WindLayer';
 
 export default function SimCanvas() {
   const map = defaultMap;
@@ -33,8 +35,8 @@ export default function SimCanvas() {
     >
       {/* 시뮬레이션 진행이 같은 프레임의 다른 useFrame 보다 먼저 실행되도록 첫 자식에 둔다 */}
       <SimDriver />
-      <color attach="background" args={[palette.sky]} />
-      <fog attach="fog" args={[palette.sky, 1200, 3000]} />
+      {/* 배경·안개는 날씨(시정·비)에 따라 WindLayer 가 정한다 */}
+      <WindLayer />
 
       <hemisphereLight args={['#ffffff', '#8a9a7a', 0.9]} />
       <directionalLight
@@ -51,6 +53,13 @@ export default function SimCanvas() {
         shadow-bias={-0.0005}
       />
 
+      {/* 장면(바닥·건물·시설)을 더블클릭하면 그 지점을 회전 중심으로 */}
+      <group
+        onDoubleClick={(e) => {
+          e.stopPropagation();
+          useViewStore.getState().requestPivot(threeToEnu(e.point.x, e.point.y, e.point.z));
+        }}
+      >
       {/* 바닥: 단지 영역 + 주변 여백 */}
       <mesh rotation={[-Math.PI / 2, 0, 0]} position={enuToThree(cx, cy, -0.05)} receiveShadow>
         <planeGeometry args={[w + 400, d + 400]} />
@@ -74,6 +83,7 @@ export default function SimCanvas() {
       <Stations stations={map.stations} />
       <Stores stores={map.stores} />
       <NoFlyZones zones={map.noFlyZones} />
+      </group>
 
       <Drones />
       <DronePaths />

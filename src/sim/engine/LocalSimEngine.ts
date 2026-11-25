@@ -16,7 +16,6 @@
  * - 기체 센서(미등록 장애물, ADS-B 없는 침입기): 탐지 거리 안에 들어와야 안다. 장애물은 탐지되면 UTM 으로 공유.
  */
 import type { SimConfig } from '../config';
-import { drainBattery } from '../flight/battery';
 import { type MotionLimits, limitsFromConfig, stepAlongPath } from '../flight/kinematics';
 import { type MissionLegs, type MissionProgress, isAirborneStage, newProgress, stepMission } from '../flight/mission';
 import { type Leg, buildTripLegs, flattenLegs } from '../flight/route';
@@ -50,6 +49,24 @@ import { ReservationTable } from '../traffic/reservationTable';
 import { findSeparationViolations } from '../traffic/separation';
 import type { Dock, Drone, FlightPhase, MapData, Order, RouteInfo, Station, Vec3, WindState } from '../types';
 import { Rng } from '../util/rng';
+import {
+  CALM,
+  type WakeZone,
+  type WeatherForecast,
+  type WeatherSnapshot,
+  type WeatherState,
+  type WeatherStats,
+  batteryCapacityFactor,
+  batteryRateFactor,
+  emptyWeatherStats,
+  flightStatus,
+  lerpWeather,
+  meanWindAt,
+  sensorFactor,
+  shearFactor,
+  wakeFactor,
+  wakeZones,
+} from '../wind/weather';
 import { clone } from '../util/vec3';
 import type {
   DispatchResult,
@@ -62,6 +79,8 @@ import type {
 } from './SimEngine';
 
 const PHASE_LOG_LIMIT = 2000;
+/** 패드를 못 잡았을 때 패드 기둥에서 비켜 기다리는 거리 (m) */
+const PAD_WAIT_OFFSET_M = 25;
 /** 격납고 ↔ 패드 지상 이동 표시 시간 (s) */
 const TAXI_SEC = 6;
 /** 버린 경로를 보여 주는 시간 (s) */
@@ -72,7 +91,7 @@ const PRUNE_EVERY_SEC = 30;
 /** 침입기가 지도 밖으로 이만큼 벗어나면 사라진 것으로 본다 (m) */
 const INTRUDER_EXIT_MARGIN_M = 300;
 
-type HoldReason = 'INTRUDER' | 'OBSTACLE' | 'LINK' | 'STATION';
+type HoldReason = 'INTRUDER' | 'OBSTACLE' | 'LINK' | 'STATION' | 'TRAFFIC';
 
 interface Hold {
   point: Vec3;
@@ -106,12 +125,19 @@ interface Mission {
   emergencyPad: Vec3 | null;
   /** 패드에서 화물 적재를 시작하는 스텝 (= 출발 스텝 - 적재 시간) */
   loadStartStep: number;
+  /** 패드가 비기를 기다리며 떠 있는 지점 */
+  padWait: Vec3 | null;
   loading: boolean;
   payloadKg: number;
 }
 
 interface DroneRuntime {
   drone: Drone;
+  /** 드론마다 다른 난류 (시간 상관 무작위) */
+  turb: Vec3;
+  /** 이번 스텝에 받은 바람 */
+  lastWind: Vec3;
+  windAt: (p: Vec3) => Vec3;
   /** 홈 도크 격납고 칸 (대기 위치) */
   slot: Vec3;
   mission: Mission | null;
@@ -143,6 +169,7 @@ const holdLabel: Record<HoldReason, string> = {
   OBSTACLE: '대기: 장애물 탐지',
   LINK: '대기: 통신두절',
   STATION: '대기: 스테이션 폐쇄',
+  TRAFFIC: '대기: 근접 드론 양보',
 };
 
 export class LocalSimEngine implements SimEngine {
@@ -188,6 +215,7 @@ export class LocalSimEngine implements SimEngine {
   private alerts: SimEvent[] = [];
   private violationEvents = 0;
   private missionsScheduled = 0;
+  private tacticalHolds = 0;
   private trafficDelaySumSec = 0;
   private altitudeShifted = 0;
 
@@ -208,6 +236,31 @@ export class LocalSimEngine implements SimEngine {
   private kitchenByStore = new Map<string, KitchenState>();
   private runners: RunnerState[] = [];
   private firstMileScale: number | undefined;
+
+  // 날씨·바람 (사용자가 정한 날씨는 초기화해도 유지한다)
+  private weather: WeatherState | undefined;
+  private weatherFrom: WeatherState = { ...CALM };
+  private weatherTarget: WeatherState | undefined;
+  private rampStart = 0;
+  private rampEnd = 0;
+  private weatherAuto = false;
+  private nextAutoStep = 0;
+  private gustOU = 0;
+  private gustEvent = 0;
+  private gustCoef = 0;
+  private gust10 = 0;
+  private gustWindow: number[] = [];
+  private zones: WakeZone[] = [];
+  private zonesDir = NaN;
+  private flight: WeatherSnapshot['status'] = { level: 'OK', reason: null };
+  private forecasts: WeatherForecast[] = [];
+  private forecastSeq = 0;
+  private wstats: WeatherStats = emptyWeatherStats();
+  private riderJobs: { orderId: string; doneStep: number }[] = [];
+  private windSig = '';
+
+  /** 패드 위치 키 → 사용 중인 드론 */
+  private padLock = new Map<string, string>();
 
   private listeners = new Set<(e: SimEvent) => void>();
   private snapshot!: SimSnapshot;
@@ -231,6 +284,7 @@ export class LocalSimEngine implements SimEngine {
     this.pads = new Map(map.stations.map((s) => [s.id, stationPads(s)]));
     this.dockPads = new Map(map.docks.map((d) => [d.id, dockLaunchPads(map, d)]));
     this.padBusy.clear();
+    this.padLock.clear();
     const { minX, minY, maxX, maxY } = map.bounds;
     this.table = new ReservationTable({ minX, minY, maxX, maxY, maxZ: config.altitude.maxM + 20 }, config.traffic.minSeparationM);
     this.useReservations = config.traffic.useReservations;
@@ -248,9 +302,23 @@ export class LocalSimEngine implements SimEngine {
     this.alerts = [];
     this.violationEvents = 0;
     this.missionsScheduled = 0;
+    this.tacticalHolds = 0;
     this.trafficDelaySumSec = 0;
     this.altitudeShifted = 0;
     this.wind = { fromDirRad: 0, meanSpeed: 0, gustSpeed: 0 };
+    this.weather ??= { ...CALM };
+    this.weatherTarget ??= { ...this.weather };
+    this.weatherFrom = { ...this.weather };
+    this.rampStart = this.rampEnd = 0;
+    this.nextAutoStep = 0;
+    this.gustOU = this.gustEvent = this.gustCoef = this.gust10 = 0;
+    this.gustWindow = [];
+    this.zonesDir = NaN;
+    this.flight = { level: 'OK', reason: null };
+    this.forecasts = [];
+    this.wstats = emptyWeatherStats();
+    this.riderJobs = [];
+    this.windSig = '';
 
     this.hazards = [];
     this.hazardSeq = 0;
@@ -310,8 +378,19 @@ export class LocalSimEngine implements SimEngine {
         taxi: null,
         ghostPath: null,
         ghostUntil: null,
+        weather: null,
       };
-      this.runtimes.push({ drone, slot, mission: null, linkLostUntilStep: null });
+      const rt: DroneRuntime = {
+        drone,
+        slot,
+        mission: null,
+        linkLostUntilStep: null,
+        turb: { x: 0, y: 0, z: 0 },
+        lastWind: { x: 0, y: 0, z: 0 },
+        windAt: () => ZERO,
+      };
+      rt.windAt = (p) => this.windAtDrone(rt, p);
+      this.runtimes.push(rt);
     }
     this.byId = new Map(this.runtimes.map((r) => [r.drone.id, r]));
     this.drones = this.runtimes.map((r) => r.drone);
@@ -332,7 +411,9 @@ export class LocalSimEngine implements SimEngine {
       kitchens: this.kitchens,
       runners: this.runners,
       firstMileScale: this.firstMileScale,
+      weather: this.weatherSnapshot(),
     };
+    this.updateZones(true);
   }
 
   /** 주문·드론·돌발 상황을 처음 상태로 (대응 정책과 센서 설정은 유지) */
@@ -353,6 +434,8 @@ export class LocalSimEngine implements SimEngine {
     s.policies = this.policies;
     s.hazardSettings = this.hazardSettings;
     s.firstMileScale = this.firstMileScale!;
+    s.weather = this.weatherSnapshot();
+    s.wind = this.wind;
     return s;
   }
 
@@ -392,9 +475,23 @@ export class LocalSimEngine implements SimEngine {
       case 'SET_HAZARD_SETTINGS':
         this.hazardSettings = { ...this.hazardSettings, ...cmd.settings };
         return { ok: true };
-      case 'SET_WIND':
-        // M5 에서 구현
-        return { ok: false, reason: 'SET_WIND 는 아직 구현되지 않았습니다' };
+      case 'SET_WEATHER':
+        this.setWeatherTarget({ ...this.weatherTarget!, ...cmd.weather }, cmd.rampSec ?? this.config.wind.rampSec);
+        return { ok: true };
+      case 'SET_WEATHER_AUTO':
+        this.weatherAuto = cmd.on;
+        this.nextAutoStep = this.stepCount;
+        return { ok: true };
+      case 'SCHEDULE_WEATHER': {
+        const id = `W${String(++this.forecastSeq).padStart(2, '0')}`;
+        this.forecasts.push({ id, at: Math.max(this.time, cmd.at), label: cmd.label, state: cmd.weather });
+        this.forecasts.sort((a, b) => a.at - b.at);
+        this.log('info', `예보 등록: T=${cmd.at.toFixed(0)}s 에 ${cmd.label}`);
+        return { ok: true, forecastId: id };
+      }
+      case 'CANCEL_WEATHER':
+        this.forecasts = this.forecasts.filter((f) => f.id !== cmd.id);
+        return { ok: true };
     }
   }
 
@@ -402,8 +499,10 @@ export class LocalSimEngine implements SimEngine {
     this.stepCount++;
     const step = this.stepCount;
 
+    this.updateWeather(dt);
     this.processHazardTimeline();
     this.processKitchens(step);
+    this.processRiders(step);
 
     if (this.peak && step >= this.peak.nextStep) {
       this.createOrder();
@@ -412,9 +511,15 @@ export class LocalSimEngine implements SimEngine {
 
     for (const rt of this.runtimes) this.stepDrone(rt, step, dt);
     this.safetyChecks();
+    if (this.useReservations) this.tacticalSeparation();
     this.checkSeparation();
 
     if (step % this.stepsPerSlot === 0) this.runDispatcher();
+    // 바람 속에서는 실제 위치가 예측에서 조금씩 벗어나므로, 비행 중 드론의 남은 예약을 주기적으로 갱신한다
+    const every = Math.round(this.config.traffic.windRereserveSec / this.dt);
+    if (this.weather!.windMeanMs > 0.5 && every > 0 && step % every === 0) {
+      for (const rt of this.runtimes) if (rt.mission && AIRBORNE.has(rt.drone.phase)) this.rereserve(rt);
+    }
     if (step % Math.round(PRUNE_EVERY_SEC / this.dt) === 0) this.prune();
   }
 
@@ -436,7 +541,8 @@ export class LocalSimEngine implements SimEngine {
       if (step >= m.hold.untilStep) {
         this.endHold(rt, m.hold.onEnd);
       } else {
-        stepAlongPath(d, [m.hold.point, m.hold.point], 1, this.limits, dt);
+        this.updateTurbulence(rt, dt);
+        stepAlongPath(d, [m.hold.point, m.hold.point], 1, this.limits, dt, rt.windAt(d.position));
         this.afterMove(rt, dt);
         return;
       }
@@ -444,8 +550,46 @@ export class LocalSimEngine implements SimEngine {
     }
 
     // 적재 시작: 격납고에서 이착륙 패드로 옮겨 화물을 싣는다 (지상이므로 공역 예약은 없다)
-    if (m.progress.stage === 'SCHEDULED' && !m.loading && step >= m.loadStartStep) this.startLoading(rt);
-    const ev = stepMission(m.legs, m.progress, d, step, this.limits, dt);
+    if (m.progress.stage === 'SCHEDULED' && !m.loading && step >= m.loadStartStep) {
+      if (this.tryLockPad(m.dockPad, d.id)) this.startLoading(rt);
+      else {
+        // 패드에 아직 다른 드론이 있다: 출발을 2초 미룬다
+        const shift = this.stepsPerSlot * 2;
+        m.loadStartStep += shift;
+        m.legs.departStep += shift;
+        d.departAt = m.legs.departStep * this.dt;
+        return;
+      }
+    }
+    this.updateTurbulence(rt, dt);
+    const leg = this.currentLeg(m);
+    // 착륙할 패드는 하강을 시작할 때 잡는다 (계획의 패드 점유 시작과 같은 시점).
+    // 못 잡으면 패드 바로 위가 아니라 옆으로 비켜 기다린다 — 패드에서 이륙하는 드론과 겹치지 않게.
+    const pad = leg?.kind === 'DESCEND' ? leg.waypoints[leg.waypoints.length - 1] : null;
+    if (pad) {
+      if (!this.tryLockPad(pad, d.id)) {
+        if (!m.padWait) {
+          // 패드는 한 줄(동서)로 놓여 있으므로, 옆 패드 위가 되지 않게 남북 방향으로 비켜 선다 (들어온 쪽으로)
+          const prev = this.previousWaypoint(m) ?? d.position;
+          const side = prev.y >= pad.y ? 1 : -1;
+          m.padWait = { x: pad.x, y: pad.y + side * PAD_WAIT_OFFSET_M, z: d.position.z };
+        }
+        stepAlongPath(d, [m.padWait, m.padWait], 1, this.limits, dt, rt.windAt(d.position));
+        d.alert = '착륙 대기: 패드 사용 중';
+        this.afterMove(rt, dt);
+        return;
+      }
+      if (m.padWait) {
+        m.padWait = null;
+        if (d.alert === '착륙 대기: 패드 사용 중') d.alert = null;
+      }
+    }
+    const legBefore = leg;
+    const ev = stepMission(m.legs, m.progress, d, step, this.limits, dt, rt.windAt);
+    // 패드에서 떠오르는 순간 그 패드를 놓아 준다 (공중 구간은 예약 테이블이 맡는다)
+    if (ev === 'DEPART') this.unlockPad(m.dockPad, d.id);
+    if (ev === 'RETURN_START') this.unlockPad(m.legs.back[0].waypoints[0], d.id);
+    void legBefore;
     const pr = m.progress;
     switch (ev) {
       case 'DEPART': {
@@ -503,17 +647,264 @@ export class LocalSimEngine implements SimEngine {
 
   private afterMove(rt: DroneRuntime, dt: number) {
     const d = rt.drone;
-    if (!AIRBORNE.has(d.phase)) return;
-    d.battery = drainBattery(d.battery, dt, this.config, this.wind.meanSpeed);
+    if (!AIRBORNE.has(d.phase)) {
+      d.weather = null;
+      return;
+    }
+    const w = rt.lastWind;
+    const ws = Math.hypot(w.x, w.y);
+    const mult = batteryRateFactor(ws, this.weather!, this.config);
+    const calmRate = 1 / this.config.drone.enduranceSec;
+    d.battery = Math.max(0, d.battery - mult * calmRate * dt);
     const hs = Math.hypot(d.velocity.x, d.velocity.y);
     // 방위각: 북 = 0, 시계 방향
     if (hs > 0.3) d.headingRad = Math.atan2(d.velocity.x, d.velocity.y);
+
+    // 바람 영향 지표
+    const air = (d as { air?: Vec3 }).air;
+    const airH = air ? Math.hypot(air.x, air.y) : hs;
+    const hx = Math.sin(d.headingRad);
+    const hy = Math.cos(d.headingRad);
+    const head = -(w.x * hx + w.y * hy);
+    const cross = Math.abs(w.x * hy - w.y * hx);
+    // 일부러 경로를 벗어나 기다리는 중(패드 대기·양보·대응 대기)이면 이탈로 치지 않는다
+    const xt = rt.mission?.hold || rt.mission?.padWait ? 0 : this.crossTrack(d);
+    d.weather = {
+      wind: { ...w },
+      windMs: ws,
+      headwindMs: head,
+      crosswindMs: cross,
+      groundSpeedMs: hs,
+      airSpeedMs: airH,
+      drainMult: mult,
+      crossTrackM: xt,
+      inWake: ws > 0 && wakeFactor(d.position, this.zones, this.weather!.windFromDeg, this.config).speed > 1.01,
+    };
+    const st = this.wstats;
+    st.energyUsed += mult * calmRate * dt;
+    st.energyCalm += calmRate * dt;
+    if ((d.phase === 'CRUISE' || d.phase === 'RETURN') && Math.abs(d.velocity.z) < 0.5 && airH > 1) st.windDelaySec += dt * Math.max(0, (airH - hs) / airH);
+    st.maxCrossTrackM = Math.max(st.maxCrossTrackM, xt);
+
     if (d.battery <= 0) this.crash(rt, '배터리 방전');
+  }
+
+  /** 현재 따라가는 경로 구간에서 벗어난 수평 거리 */
+  private crossTrack(d: Drone): number {
+    if (d.path.length < 2 || d.pathIndex < 1) return 0;
+    const a = d.path[Math.min(d.pathIndex - 1, d.path.length - 2)];
+    const b = d.path[Math.min(d.pathIndex, d.path.length - 1)];
+    const dx = b.x - a.x;
+    const dy = b.y - a.y;
+    const l2 = dx * dx + dy * dy;
+    if (l2 < 1) return 0;
+    const t = Math.max(0, Math.min(1, ((d.position.x - a.x) * dx + (d.position.y - a.y) * dy) / l2));
+    return Math.hypot(d.position.x - (a.x + dx * t), d.position.y - (a.y + dy * t));
+  }
+
+  // ── 날씨·바람 ──
+
+  private setWeatherTarget(target: WeatherState, rampSec: number) {
+    this.weatherFrom = { ...this.weather! };
+    this.weatherTarget = { ...target };
+    this.rampStart = this.time;
+    this.rampEnd = this.time + Math.max(0, rampSec);
+    if (rampSec <= 0) this.weather = { ...target };
+  }
+
+  private updateWeather(dt: number) {
+    const t = this.time;
+    // 예보
+    while (this.forecasts.length && this.forecasts[0].at <= t + 1e-9) {
+      const f = this.forecasts.shift()!;
+      this.setWeatherTarget(f.state, this.config.wind.rampSec);
+      this.log('warn', `예보대로 날씨 변화: ${f.label}`);
+    }
+    // 자동 변화: 30초마다 목표를 조금씩 바꾼다
+    if (this.weatherAuto && this.stepCount >= this.nextAutoStep) {
+      const g = this.weatherTarget!;
+      const next: WeatherState = {
+        ...g,
+        windFromDeg: (((g.windFromDeg + this.gauss() * 15) % 360) + 360) % 360,
+        windMeanMs: Math.min(16, Math.max(0, (g.windMeanMs || 1) * Math.exp(this.gauss() * 0.18))),
+        gustiness: Math.min(1, Math.max(0, g.gustiness + this.gauss() * 0.08)),
+      };
+      this.setWeatherTarget(next, 30);
+      this.nextAutoStep = this.stepCount + Math.round(30 / this.dt);
+    }
+    // 서서히 바뀜
+    const f = this.rampEnd > this.rampStart ? Math.min(1, (t - this.rampStart) / (this.rampEnd - this.rampStart)) : 1;
+    this.weather = lerpWeather(this.weatherFrom, this.weatherTarget!, f);
+    this.updateZones(false);
+
+    // 돌풍: 시간 상관 무작위 + 가끔 강한 돌풍
+    const w = this.weather;
+    if (w.gustiness > 0.01 && w.windMeanMs > 0.05) {
+      const tau = this.config.wind.gustTauSec;
+      const sigma = 0.35 * w.gustiness;
+      this.gustOU += (-this.gustOU / tau) * dt + sigma * Math.sqrt((2 * dt) / tau) * this.gauss();
+      if (this.rng.next() < ((w.gustiness * 1.5) / 60) * dt) this.gustEvent = Math.max(this.gustEvent, (0.5 + 0.7 * this.rng.next()) * w.gustiness);
+      this.gustEvent *= Math.exp(-dt / 3);
+    } else {
+      this.gustOU = 0;
+      this.gustEvent = 0;
+    }
+    this.gustCoef = this.gustOU + this.gustEvent;
+    this.gust10 = w.windMeanMs * (1 + Math.max(0, this.gustCoef));
+    // 운항 판단은 최근 3초 최대 돌풍으로 (깜박임 방지)
+    if (this.stepCount % this.stepsPerSlot === 0) {
+      this.gustWindow.push(this.gust10);
+      if (this.gustWindow.length > 3) this.gustWindow.shift();
+    }
+    const gustMax = Math.max(this.gust10, ...this.gustWindow);
+    const st = flightStatus(w.windMeanMs, gustMax, this.config);
+    if (st.level === 'SUSPENDED' && this.flight.level !== 'SUSPENDED') {
+      this.wstats.suspensions++;
+      this.log('bad', `🌬 운항 중단 — ${st.reason}. 새 출발을 멈추고 주문은 라이더로`);
+    } else if (st.level !== 'SUSPENDED' && this.flight.level === 'SUSPENDED') {
+      this.log('good', '🌬 바람이 약해져 운항 재개');
+    }
+    this.flight = st;
+    if (st.level === 'SUSPENDED') this.wstats.suspendedSec += dt;
+    this.wind = { fromDirRad: (w.windFromDeg * Math.PI) / 180, meanSpeed: w.windMeanMs, gustSpeed: this.gust10 };
+
+    // 평균 바람이 바뀌면 (예측에 쓰는) 궤적 캐시를 버린다
+    const sig = `${Math.round(w.windFromDeg / 10)}|${Math.round(w.windMeanMs * 2)}|${w.gustiness > 0.05 ? 1 : 0}`;
+    if (sig !== this.windSig) {
+      this.windSig = sig;
+      this.candidateCache.clear();
+    }
+  }
+
+  private updateZones(force: boolean) {
+    const dir = this.weather!.windFromDeg;
+    if (!force && Math.abs(((dir - this.zonesDir + 540) % 360) - 180) < 2) return;
+    this.zonesDir = dir;
+    this.zones = wakeZones(this.map, dir, this.config);
+  }
+
+  private gauss(): number {
+    const u = Math.max(1e-12, this.rng.next());
+    const v = this.rng.next();
+    return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
+  }
+
+  /** 드론마다 다른 작은 난류 */
+  private updateTurbulence(rt: DroneRuntime, dt: number) {
+    const w = this.weather!;
+    if (w.windMeanMs <= 0.05) {
+      rt.turb.x = rt.turb.y = rt.turb.z = 0;
+      return;
+    }
+    const sigma = this.config.wind.turbulenceRatio * w.windMeanMs * shearFactor(rt.drone.position.z, this.config) * (1 + w.gustiness);
+    const tau = 2;
+    const k = sigma * Math.sqrt((2 * dt) / tau);
+    rt.turb.x += (-rt.turb.x / tau) * dt + k * this.gauss();
+    rt.turb.y += (-rt.turb.y / tau) * dt + k * this.gauss();
+    rt.turb.z += (-rt.turb.z / tau) * dt + k * 0.3 * this.gauss();
+  }
+
+  /** 드론이 받는 실제 바람: 평균(고도·빌딩풍) × (1 + 돌풍) + 난류 */
+  private windAtDrone(rt: DroneRuntime, p: Vec3): Vec3 {
+    const w = this.weather!;
+    if (w.windMeanMs <= 0.05) {
+      rt.lastWind = ZERO;
+      return ZERO;
+    }
+    const mean = meanWindAt(p, w, this.zones, this.config);
+    const k = 1 + this.gustCoef * wakeFactor(p, this.zones, w.windFromDeg, this.config).gust;
+    const out = { x: mean.x * k + rt.turb.x, y: mean.y * k + rt.turb.y, z: rt.turb.z };
+    rt.lastWind = out;
+    return out;
+  }
+
+  /** 경로 예측용 평균 바람 (돌풍·난류 없음, 결정적) */
+  private meanWindSampler(): ((p: Vec3) => Vec3) | undefined {
+    const w = { ...this.weather! };
+    if (w.windMeanMs <= 0.05) return undefined;
+    const zones = this.zones;
+    return (p) => meanWindAt(p, w, zones, this.config);
+  }
+
+  /** 바람이 셀수록·돌풍이 클수록 예약 여유를 키운다 (돌풍·난류로 예측 위치에서 벗어나는 만큼) */
+  private windBuffer(): { time: boolean; marginM: number } {
+    const w = this.weather!;
+    if (w.windMeanMs <= 0.5) return { time: false, marginM: 0 };
+    const atCruise = w.windMeanMs * shearFactor(this.config.altitude.cruiseM, this.config);
+    const t = this.config.traffic;
+    return { time: true, marginM: Math.min(t.windMarginMaxM, t.windMarginBaseM + t.windMarginPerMs * atCruise * (0.5 + w.gustiness)) };
+  }
+
+  private sensorRange(): number {
+    return this.hazardSettings.sensorRangeM * sensorFactor(this.weather!, this.config);
+  }
+
+  private isSuspended(): boolean {
+    return this.flight.level === 'SUSPENDED';
+  }
+
+  private weatherSnapshot(): WeatherSnapshot {
+    const w = this.weather!;
+    const cruise = this.config.altitude.cruiseM;
+    return {
+      state: { ...w },
+      target: { ...this.weatherTarget! },
+      auto: this.weatherAuto,
+      mean10: w.windMeanMs,
+      gust10: this.gust10,
+      meanCruise: w.windMeanMs * shearFactor(cruise, this.config),
+      status: this.flight,
+      sensorFactor: sensorFactor(w, this.config),
+      capacityFactor: batteryCapacityFactor(w, this.config),
+      drainAtCruise: batteryRateFactor(w.windMeanMs * shearFactor(cruise, this.config), w, this.config),
+      stats: { ...this.wstats },
+      wakeZones: this.zones,
+      forecasts: this.forecasts,
+    };
+  }
+
+  // ── 라이더 (운항 중단 시) ──
+
+  private toRider(o: Order, why: string) {
+    o.mode = 'RIDER';
+    o.status = 'RIDER_ASSIGNED';
+    o.droneId = null;
+    o.t.assigned = this.time;
+    const store = this.map.stores.find((s) => s.id === o.storeId)!;
+    const dest = this.map.buildings.find((b) => b.id === o.destBuildingId)!;
+    const [dx, dy] = dest.footprint.reduce(([sx, sy], [x, y]) => [sx + x / dest.footprint.length, sy + y / dest.footprint.length], [0, 0]);
+    const r = this.config.rider;
+    const dur = r.pickupWaitSec + Math.hypot(dx - store.position.x, dy - store.position.y) * 1.3 / r.speedMs + r.handoffSec;
+    this.riderJobs.push({ orderId: o.id, doneStep: this.stepCount + Math.round(dur / this.dt) });
+    this.wstats.riderOrders++;
+    this.log('info', `주문 ${o.id} 라이더 배정 (${why}, 약 ${Math.round(dur / 60)}분)`);
+  }
+
+  private processRiders(step: number) {
+    if (this.isSuspended()) {
+      // 포장이 끝났는데 드론이 못 뜨면 라이더가 가게에서 바로 가져간다
+      for (const k of this.kitchens) {
+        while (k.ready.length) this.toRider(this.ordersById.get(k.ready.shift()!)!, '운항 중단');
+      }
+    }
+    if (!this.riderJobs.length) return;
+    this.riderJobs = this.riderJobs.filter((j) => {
+      if (step < j.doneStep) return true;
+      const o = this.ordersById.get(j.orderId);
+      if (o) {
+        o.status = 'DELIVERED';
+        o.t.delivered = this.time;
+        this.emit({ type: 'ORDER_DELIVERED', orderId: o.id });
+      }
+      return false;
+    });
   }
 
   private arriveHome(rt: DroneRuntime) {
     const d = rt.drone;
     const m = rt.mission!;
+    // 격납고로 들어가거나 (비상착륙이면 그대로 남는다)
+    if (!m.emergencyPad) this.unlockPad(m.dockPad, d.id);
     const home = this.dockPads.get(d.homeDockId)!;
     const atHome = !m.emergencyPad || home.some((p) => p.x === m.emergencyPad!.x && p.y === m.emergencyPad!.y);
     rt.mission = null;
@@ -537,6 +928,58 @@ export class LocalSimEngine implements SimEngine {
     if (!d.linkLostUntil) d.alert = null;
     this.setPhase(rt, 'IDLE');
     if (d.battery < this.config.drone.swapBelowBattery) d.swapUntil = this.time + this.config.drone.batterySwapSec;
+  }
+
+  /**
+   * 비행 중 근접 회피: 예약은 평균 바람으로 예측한 궤적이라 돌풍·난류로 조금씩 어긋날 수 있다.
+   * 두 드론이 (최소 이격 + 여유) 안으로 다가오면 늦게 출발한 쪽이 잠깐 멈춰 양보한다.
+   */
+  private tacticalSeparation() {
+    const t = this.config.traffic;
+    // 바람이 없으면 예약대로 정확히 날므로 필요 없다 (오히려 지연이 연쇄된다)
+    if (t.tacticalExtraM < 0 || this.weather!.windMeanMs <= 0.5) return;
+    // 지금 속도로 lookahead 초 안에 (최소 이격 + 여유)보다 가까워질 쌍을 찾는다 (최근접점, CPA)
+    const sepGoal = t.minSeparationM + t.tacticalExtraM;
+    const look = t.tacticalLookaheadSec;
+    const air = this.runtimes.filter((r) => r.mission && AIRBORNE.has(r.drone.phase));
+    for (let i = 0; i < air.length; i++) {
+      for (let j = i + 1; j < air.length; j++) {
+        const a = air[i].drone;
+        const b = air[j].drone;
+        const rx = a.position.x - b.position.x;
+        const ry = a.position.y - b.position.y;
+        const rz = a.position.z - b.position.z;
+        const d2 = rx * rx + ry * ry + rz * rz;
+        if (d2 > 150 * 150) continue;
+        const vx = a.velocity.x - b.velocity.x;
+        const vy = a.velocity.y - b.velocity.y;
+        const vz = a.velocity.z - b.velocity.z;
+        const v2 = vx * vx + vy * vy + vz * vz;
+        const tc = v2 > 1e-6 ? Math.min(look, Math.max(0, -(rx * vx + ry * vy + rz * vz) / v2)) : 0;
+        const cx = rx + vx * tc;
+        const cy = ry + vy * tc;
+        const cz = rz + vz * tc;
+        if (cx * cx + cy * cy + cz * cz > sepGoal * sepGoal) continue;
+        if (tc <= 0 && d2 > sepGoal * sepGoal) continue;
+        // 누가 멈춰야 실제로 피해지는지 본다: X 가 멈추면 상대만 움직이므로 상대 속도로 최근접점을 다시 계산
+        const ifStops = (x: Drone, o: Drone) => {
+          const ox = o.position.x - x.position.x;
+          const oy = o.position.y - x.position.y;
+          const oz = o.position.z - x.position.z;
+          const w2 = o.velocity.x ** 2 + o.velocity.y ** 2 + o.velocity.z ** 2;
+          const tt = w2 > 1e-6 ? Math.min(look, Math.max(0, -(ox * o.velocity.x + oy * o.velocity.y + oz * o.velocity.z) / w2)) : 0;
+          return Math.hypot(ox + o.velocity.x * tt, oy + o.velocity.y * tt, oz + o.velocity.z * tt);
+        };
+        const later = air[i].mission!.legs.departStep >= air[j].mission!.legs.departStep ? air[i] : air[j];
+        const earlier = later === air[i] ? air[j] : air[i];
+        const dLater = ifStops(later.drone, earlier.drone);
+        const dEarlier = ifStops(earlier.drone, later.drone);
+        // 늦게 출발한 쪽이 멈춰서 해결되면 그쪽이, 아니면 더 멀어지는 쪽이 양보한다
+        const yielder = dLater >= sepGoal ? later : dEarlier >= sepGoal ? earlier : dLater >= dEarlier ? later : earlier;
+        if (yielder.mission!.hold) continue;
+        this.startHold(yielder, clone(yielder.drone.position), t.tacticalHoldSec, 'TRAFFIC', 'RESUME');
+      }
+    }
   }
 
   private checkSeparation() {
@@ -854,7 +1297,7 @@ export class LocalSimEngine implements SimEngine {
             this.crash(rt, '미등록 장애물 충돌', h.id);
             break;
           }
-          if (!h.discovered && obstacleDistance(p, s, this.config.pathfinding.verticalClearanceM) < set.sensorRangeM) {
+          if (!h.discovered && obstacleDistance(p, s, this.config.pathfinding.verticalClearanceM) < this.sensorRange()) {
             h.discovered = true;
             h.discoveredBy = d.id;
             const dist = obstacleDistance(p, s, Infinity);
@@ -900,7 +1343,7 @@ export class LocalSimEngine implements SimEngine {
             }
             continue;
           }
-          const range = s.adsb && this.linkOk(rt) ? set.adsbAlertRangeM : set.sensorRangeM;
+          const range = s.adsb && this.linkOk(rt) ? set.adsbAlertRangeM : this.sensorRange();
           if (dist < range && closing && m && !m.hold && this.policies.INTRUDER !== 'IGNORE') {
             const via = s.adsb && this.linkOk(rt) ? 'ADS-B 경보' : '센서 탐지';
             let point = clone(p);
@@ -942,7 +1385,8 @@ export class LocalSimEngine implements SimEngine {
     m.hold = { point, untilStep: this.stepCount + Math.round(durSec / this.dt), reason, hazardId, onEnd, resumePhase };
     d.alert = holdLabel[reason];
     this.setPhase(rt, 'HOLD');
-    this.safety.holds++;
+    if (reason !== 'TRAFFIC') this.safety.holds++;
+    else this.tacticalHolds++;
     this.rereserve(rt);
   }
 
@@ -1168,6 +1612,7 @@ export class LocalSimEngine implements SimEngine {
 
   private crash(rt: DroneRuntime, why: string, hazardId?: string) {
     const d = rt.drone;
+    this.unlockAll(d.id);
     const m = rt.mission;
     if (m?.orderId && m.progress.stage === 'OUTBOUND') this.failOrder(m.orderId, `${d.id} 추락`);
     rt.mission = null;
@@ -1197,6 +1642,7 @@ export class LocalSimEngine implements SimEngine {
 
   private cancelScheduled(rt: DroneRuntime, why: string) {
     const d = rt.drone;
+    this.unlockAll(d.id);
     this.requeueOrder(rt, why);
     rt.mission = null;
     this.table.release(d.id, 0);
@@ -1245,15 +1691,27 @@ export class LocalSimEngine implements SimEngine {
     this.releaseBusy(d.id);
     let pred;
     try {
-      pred = predictRemaining(m.legs, m.progress, d, this.stepCount, this.limits, this.dt, this.stepsPerSlot, this.table, m.hold);
+      pred = predictRemaining(
+        m.legs,
+        m.progress,
+        d,
+        this.stepCount,
+        this.limits,
+        this.dt,
+        this.stepsPerSlot,
+        this.table,
+        m.hold,
+        this.meanWindSampler(),
+        this.windBuffer(),
+      );
     } catch {
       return;
     }
     this.table.reserve(d.id, pred.baseSlot, pred.footprint);
-    if (!m.emergencyPad && pred.landedStep !== null && pred.returnStartStep !== null) {
-      this.addBusy(`${m.stationId}#${m.padIndex}`, pred.landedStep, pred.returnStartStep, d.id);
+    if (!m.emergencyPad && pred.returnStartStep !== null) {
+      this.addBusy(`${m.stationId}#${m.padIndex}`, pred.outDescendStep ?? this.stepCount, pred.returnStartStep, d.id);
     }
-    this.addBusy(m.dockPadKey, pred.doneStep, pred.doneStep + this.stepsPerSlot, d.id);
+    this.addBusy(m.dockPadKey, pred.backDescendStep ?? this.stepCount, pred.doneStep + this.stepsPerSlot, d.id);
   }
 
   // ── 주문·배정 ──
@@ -1293,6 +1751,16 @@ export class LocalSimEngine implements SimEngine {
 
   private runDispatcher() {
     if (this.queue.length === 0) return;
+    if (this.isSuspended()) {
+      // 운항 중단: 새 출발은 없고, 도크에서 오래 기다린 주문은 라이더로
+      this.queue = this.queue.filter((id) => {
+        const o = this.ordersById.get(id)!;
+        if (this.time - (o.t.atDock ?? o.t.created) < this.config.rider.fallbackAfterSec) return true;
+        this.toRider(o, '운항 중단 장기화');
+        return false;
+      });
+      return;
+    }
     const remaining: string[] = [];
     for (const orderId of this.queue) {
       const o = this.ordersById.get(orderId)!;
@@ -1382,7 +1850,7 @@ export class LocalSimEngine implements SimEngine {
     for (const r of this.runners) {
       const k = this.kitchenByStore.get(r.storeId)!;
       const walk = this.map.stores.find((x) => x.id === r.storeId)!.walkToDockSec;
-      if (r.phase === 'IDLE' && k.ready.length) {
+      if (r.phase === 'IDLE' && k.ready.length && !this.isSuspended()) {
         r.orderIds = k.ready.splice(0, kitchenProfile(this.config, r.storeId).runnerCapacity);
         r.phase = 'TO_DOCK';
         r.startStep = step;
@@ -1408,6 +1876,44 @@ export class LocalSimEngine implements SimEngine {
         r.phase = 'IDLE';
       }
     }
+  }
+
+  // ── 패드 잠금 ──
+
+  private padKey(p: Vec3): string {
+    return `${p.x.toFixed(1)},${p.y.toFixed(1)}`;
+  }
+
+  private tryLockPad(p: Vec3, droneId: string): boolean {
+    const k = this.padKey(p);
+    const owner = this.padLock.get(k);
+    if (owner && owner !== droneId) return false;
+    this.padLock.set(k, droneId);
+    return true;
+  }
+
+  private unlockPad(p: Vec3, droneId: string) {
+    const k = this.padKey(p);
+    if (this.padLock.get(k) === droneId) this.padLock.delete(k);
+  }
+
+  private unlockAll(droneId: string) {
+    for (const [k, v] of this.padLock) if (v === droneId) this.padLock.delete(k);
+  }
+
+  /** 지금 구간의 바로 앞 웨이포인트 (하강 구간이면 직전 순항 구간의 끝 앞) */
+  private previousWaypoint(m: Mission): Vec3 | undefined {
+    const pr = m.progress;
+    const legs = pr.stage === 'OUTBOUND' ? m.legs.out : m.legs.back;
+    const prevLeg = legs[pr.legIndex - 1];
+    return prevLeg?.waypoints[prevLeg.waypoints.length - 2];
+  }
+
+  private currentLeg(m: Mission): Leg | undefined {
+    const pr = m.progress;
+    if (pr.stage === 'OUTBOUND') return m.legs.out[pr.legIndex];
+    if (pr.stage === 'RETURN') return m.legs.back[pr.legIndex];
+    return undefined;
   }
 
   private startLoading(rt: DroneRuntime) {
@@ -1480,7 +1986,9 @@ export class LocalSimEngine implements SimEngine {
       return this.candidateCache.get(key)!;
     };
 
-    const rate = (1 + this.config.drone.batteryWindFactorPerMs * this.wind.meanSpeed) / this.config.drone.enduranceSec;
+    // 순항 고도 평균 바람·날씨 기준 소모율
+    const cruiseWind = this.weather!.windMeanMs * shearFactor(this.config.altitude.cruiseM, this.config);
+    const rate = batteryRateFactor(cruiseWind, this.weather!, this.config) / this.config.drone.enduranceSec;
     let sawRoute = false;
     let batteryShort = false;
     for (const delay of delaySlots) {
@@ -1497,20 +2005,21 @@ export class LocalSimEngine implements SimEngine {
               batteryShort = true;
               continue;
             }
-            const from = departStep + c.pred.landedStep;
+            const from = departStep + c.pred.outDescendStep;
             const to = departStep + c.pred.returnStartStep;
             if (this.padKeyOverlaps(`${stationId}#${p}`, from, to)) continue;
             // 도크 패드: 출발 직전 1칸, 복귀 착륙 직후 1칸 동안 비어 있어야 한다
             const dkey = `${dockId}#d${dp}`;
             const done = departStep + c.pred.doneStep;
+            const backDescend = departStep + c.pred.backDescendStep;
             const padFrom = departStep - Math.max(loadSteps, this.stepsPerSlot);
             if (this.padKeyOverlaps(dkey, padFrom, departStep)) continue;
-            if (this.padKeyOverlaps(dkey, done, done + this.stepsPerSlot)) continue;
+            if (this.padKeyOverlaps(dkey, backDescend, done + this.stepsPerSlot)) continue;
             if (this.useReservations && !this.table.isFree(rt.drone.id, departSlot, c.pred.footprint)) continue;
 
             this.commit(rt, c, departStep, departSlot, stationId, orderId, payloadKg, from, to, dkey, departStep - loadSteps);
             this.addBusy(dkey, padFrom, departStep, rt.drone.id);
-            this.addBusy(dkey, done, done + this.stepsPerSlot, rt.drone.id);
+            this.addBusy(dkey, backDescend, done + this.stepsPerSlot, rt.drone.id);
             this.trafficDelaySumSec += delay * t.slotSec;
             if (alt[0] !== cruise) this.altitudeShifted++;
             return { ok: true };
@@ -1541,7 +2050,13 @@ export class LocalSimEngine implements SimEngine {
     const outLegs: Leg[] = buildTripLegs(dockPad, pad, outAlt, out.path.slice(1, -1));
     const backLegs: Leg[] = buildTripLegs(pad, dockPad, backAlt, back.path.slice(1, -1));
     const legs = { out: outLegs, back: backLegs, dwellSteps };
-    const pred = predictMission(legs, dockPad, this.limits, this.dt, this.stepsPerSlot, this.table);
+    let pred: MissionPrediction;
+    try {
+      pred = predictMission(legs, dockPad, this.limits, this.dt, this.stepsPerSlot, this.table, this.meanWindSampler(), this.windBuffer());
+    } catch {
+      // 바람이 너무 세서 예측 비행이 끝나지 않는다: 이 조합으로는 배정하지 않는다
+      return null;
+    }
     const o = flattenLegs(outLegs);
     const b = flattenLegs(backLegs);
     return {
@@ -1598,6 +2113,7 @@ export class LocalSimEngine implements SimEngine {
       hold: null,
       emergencyPad: null,
       loadStartStep,
+      padWait: null,
       loading: false,
       payloadKg,
     };
@@ -1675,6 +2191,7 @@ export class LocalSimEngine implements SimEngine {
       avgTrafficDelaySec: this.missionsScheduled ? this.trafficDelaySumSec / this.missionsScheduled : 0,
       altitudeShiftRatio: this.missionsScheduled ? this.altitudeShifted / this.missionsScheduled : 0,
       queuedOrders: this.queue.length,
+      tacticalHolds: this.tacticalHolds,
     };
   }
 
@@ -1731,6 +2248,8 @@ function routeInfo(p: Extract<PlanResult, { ok: true }>): RouteInfo {
     computeMs: p.computeMs,
   };
 }
+
+const ZERO: Vec3 = Object.freeze({ x: 0, y: 0, z: 0 }) as Vec3;
 
 /** crash() 가 단계를 바꾸므로 타입 좁히기를 피하려고 함수로 확인한다 */
 const isFailed = (d: Drone) => d.phase === 'FAILED';

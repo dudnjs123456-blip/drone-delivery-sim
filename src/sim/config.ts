@@ -31,6 +31,8 @@ export interface SimConfig {
   };
   drone: {
     cruiseSpeedKmh: number;
+    /** 바람을 거슬러 낼 수 있는 최대 대기 속도 (순항 속도보다 크다) */
+    maxAirspeedKmh: number;
     maxAccelMs2: number;
     climbRateMs: number;
     descentRateMs: number;
@@ -62,10 +64,51 @@ export interface SimConfig {
     maxM: number;
   };
   wind: {
-    /** 평균 풍속이 이 값 이상이면 운항 중단 (m/s) */
+    /** 평균 풍속(지상 10m 기준)이 이 값 이상이면 운항 중단 (m/s) */
     suspendMeanMs: number;
-    /** 돌풍이 이 값 이상이면 운항 중단 (m/s) */
+    /** 돌풍(지상 10m 기준)이 이 값 이상이면 운항 중단 (m/s) */
     suspendGustMs: number;
+    /** 이 비율 이상이면 "주의" 로 표시 */
+    cautionRatio: number;
+    /** 풍속 기준 높이 (m) */
+    refHeightM: number;
+    /** 고도에 따른 풍속 증가 지수 (도심 0.2~0.3): U(z) = U10 · (z/10)^α */
+    shearExponent: number;
+    /** 돌풍 변동 시간 상수 (s) */
+    gustTauSec: number;
+    /** 드론마다 다른 난류의 크기 (평균 풍속 대비) */
+    turbulenceRatio: number;
+    /** 빌딩풍: 이 높이 이상 건물 뒤쪽에 생긴다 (m) */
+    wakeMinHeightM: number;
+    /** 빌딩풍 구역 길이 = 건물 높이 × 이 값 */
+    wakeLengthFactor: number;
+    /** 빌딩풍 구역의 최대 풍속 배율 */
+    wakeAmplify: number;
+    /** 빌딩풍 구역의 돌풍 배율 */
+    wakeGustAmplify: number;
+    /** 날씨를 바꿀 때 서서히 바뀌는 시간 (s) */
+    rampSec: number;
+  };
+  weather: {
+    /** 강수 1mm/h 당 배터리 소모 증가 비율 */
+    batteryRainPerMmH: number;
+    /** 기준 기온 아래 1°C 당 배터리 용량 감소 비율 */
+    batteryColdPerDegC: number;
+    batteryRefTempC: number;
+    /** 강수 1mm/h 당 센서 거리 감소 비율 */
+    sensorRainPerMmH: number;
+    /** 이 시정(m) 이하부터 센서 거리가 비례해서 줄어든다 */
+    sensorFullVisibilityM: number;
+  };
+  rider: {
+    /** 라이더가 가게에 도착하기까지 (s) */
+    pickupWaitSec: number;
+    /** 라이더 이동 속도 (m/s) */
+    speedMs: number;
+    /** 문 앞 인계 (s) */
+    handoffSec: number;
+    /** 운항 중단 중 도크에서 이 시간 넘게 기다린 주문은 라이더로 넘긴다 (s) */
+    fallbackAfterSec: number;
   };
   traffic: {
     /** 드론 간 최소 이격 거리 (m). 예약 테이블 셀 크기로도 쓴다 */
@@ -82,6 +125,17 @@ export interface SimConfig {
     altitudePairsM: readonly (readonly [number, number])[];
     /** 혼잡으로 배정에 실패한 주문을 다시 시도하기까지 기다리는 시간 (s) */
     retryAfterSec: number;
+    /** 바람 속 예약 공간 여유 = 기본 + 계수 × 순항고도 풍속 × (0.5 + 돌풍 세기), 최대값 (m) */
+    windMarginBaseM: number;
+    windMarginPerMs: number;
+    windMarginMaxM: number;
+    /** 비행 중 근접 회피: 최소 이격 + 이 거리 안으로 다가오면 늦게 출발한 쪽이 tacticalHoldSec 동안 멈춘다 */
+    tacticalExtraM: number;
+    tacticalHoldSec: number;
+    /** 근접 예측 시간 (s): 이 시간 안에 가까워질 쌍을 미리 피한다 */
+    tacticalLookaheadSec: number;
+    /** 바람이 불 때 비행 중 드론의 남은 예약을 다시 계산하는 주기 (s) */
+    windRereserveSec: number;
     /** 출발 지연 후보 간격과 최대값 (s) */
     delayStepSec: number;
     maxDepartureDelaySec: number;
@@ -155,6 +209,7 @@ export const defaultConfig: SimConfig = {
   },
   drone: {
     cruiseSpeedKmh: 40,
+    maxAirspeedKmh: 65,
     maxAccelMs2: 2,
     climbRateMs: 3,
     descentRateMs: 3,
@@ -177,6 +232,29 @@ export const defaultConfig: SimConfig = {
   wind: {
     suspendMeanMs: 10,
     suspendGustMs: 15,
+    cautionRatio: 0.7,
+    refHeightM: 10,
+    shearExponent: 0.22,
+    gustTauSec: 4,
+    turbulenceRatio: 0.12,
+    wakeMinHeightM: 50,
+    wakeLengthFactor: 2.5,
+    wakeAmplify: 1.4,
+    wakeGustAmplify: 2,
+    rampSec: 20,
+  },
+  weather: {
+    batteryRainPerMmH: 0.015,
+    batteryColdPerDegC: 0.012,
+    batteryRefTempC: 15,
+    sensorRainPerMmH: 0.02,
+    sensorFullVisibilityM: 1000,
+  },
+  rider: {
+    pickupWaitSec: 240,
+    speedMs: 5,
+    handoffSec: 60,
+    fallbackAfterSec: 120,
   },
   traffic: {
     minSeparationM: 15,
@@ -187,6 +265,13 @@ export const defaultConfig: SimConfig = {
       [120, 90],
     ],
     retryAfterSec: 5,
+    windMarginBaseM: 0,
+    windMarginPerMs: 0,
+    windMarginMaxM: 5,
+    tacticalExtraM: 2,
+    tacticalHoldSec: 3,
+    tacticalLookaheadSec: 8,
+    windRereserveSec: 10,
     delayStepSec: 5,
     maxDepartureDelaySec: 180,
   },

@@ -8,6 +8,7 @@
  * - DWELL: step >= dwellUntilStep 인 스텝에 복귀를 시작하고 같은 스텝에 한 번 진행한다.
  */
 import { type KinematicState, type MotionLimits, stepAlongPath } from './kinematics';
+import type { Vec3 } from '../types';
 import type { Leg } from './route';
 
 export type MissionStage = 'SCHEDULED' | 'OUTBOUND' | 'DWELL' | 'RETURN' | 'DONE';
@@ -31,7 +32,11 @@ export const newProgress = (): MissionProgress => ({ stage: 'SCHEDULED', legInde
 
 export const isAirborneStage = (s: MissionStage) => s === 'OUTBOUND' || s === 'RETURN';
 
+/** 위치 → 바람 벡터 (없으면 무풍) */
+export type WindSampler = (p: Vec3) => Vec3;
+
 /** step 번째 스텝을 처리한다. kin 과 pr 를 직접 갱신하고, 일어난 사건을 돌려준다 */
+
 export function stepMission(
   m: MissionLegs,
   pr: MissionProgress,
@@ -39,6 +44,7 @@ export function stepMission(
   step: number,
   lim: MotionLimits,
   dt: number,
+  windAt?: WindSampler,
 ): MissionEvent | null {
   let ev: MissionEvent | null = null;
   if (pr.stage === 'SCHEDULED') {
@@ -57,7 +63,7 @@ export function stepMission(
   if (pr.stage !== 'OUTBOUND' && pr.stage !== 'RETURN') return ev;
 
   const legs = pr.stage === 'OUTBOUND' ? m.out : m.back;
-  const res = stepAlongPath(kin, legs[pr.legIndex].waypoints, pr.wpIndex, lim, dt);
+  const res = stepAlongPath(kin, legs[pr.legIndex].waypoints, pr.wpIndex, lim, dt, windAt?.(kin.position));
   pr.wpIndex = res.wpIndex;
   if (!res.done) return ev;
 

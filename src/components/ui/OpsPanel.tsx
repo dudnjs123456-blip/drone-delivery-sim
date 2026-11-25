@@ -11,6 +11,7 @@ import { phaseColor, phaseLabel } from '../phase';
 import { runnerDisplayPos } from '../scenePos';
 import { DroneCard } from './DronePanel';
 import { HazardPanel } from './HazardPanel';
+import { WeatherPanel } from './WeatherPanel';
 
 const orderStatusLabel: Record<OrderStatus, string> = {
   KITCHEN_QUEUE: '주방 대기',
@@ -356,7 +357,9 @@ function DroneList() {
 }
 
 export function OpsPanel() {
-  const [tab, setTab] = useState<'ops' | 'hazard'>('ops');
+  const [tab, setTab] = useState<'ops' | 'hazard' | 'weather'>('ops');
+  const wlevel = useSimStore((s) => s.weather.status.level);
+  const wmean = useSimStore((s) => s.weather.mean10);
   const activeHazards = useSimStore((s) => s.hazards.filter((h) => h.status === 'ACTIVE' || h.status === 'SCHEDULED').length);
   return (
     <div className="flex max-h-[calc(100vh-7rem)] w-[23rem] flex-col rounded-lg bg-white/95 shadow-lg backdrop-blur">
@@ -369,9 +372,20 @@ export function OpsPanel() {
         </button>
         <button
           onClick={() => setTab('hazard')}
-          className={`flex-1 rounded-tr-lg px-3 py-2 ${tab === 'hazard' ? 'bg-white text-slate-900' : 'bg-slate-100 text-slate-500 hover:text-slate-800'}`}
+          className={`flex-1 px-3 py-2 ${tab === 'hazard' ? 'bg-white text-slate-900' : 'bg-slate-100 text-slate-500 hover:text-slate-800'}`}
         >
           ⚡ 돌발 상황{activeHazards > 0 && <span className="ml-1 rounded-full bg-rose-600 px-1.5 text-[10px] text-white">{activeHazards}</span>}
+        </button>
+        <button
+          onClick={() => setTab('weather')}
+          className={`flex-1 rounded-tr-lg px-3 py-2 ${tab === 'weather' ? 'bg-white text-slate-900' : 'bg-slate-100 text-slate-500 hover:text-slate-800'}`}
+        >
+          🌬 날씨
+          <span
+            className={`ml-1 rounded-full px-1.5 text-[10px] text-white ${wlevel === 'SUSPENDED' ? 'bg-red-600' : wlevel === 'CAUTION' ? 'bg-amber-500' : 'bg-emerald-600'}`}
+          >
+            {wmean.toFixed(0)}m/s
+          </span>
         </button>
       </div>
       <div className="space-y-2 overflow-y-auto p-3">
@@ -382,8 +396,10 @@ export function OpsPanel() {
             <TrafficSection />
             <DroneList />
           </>
-        ) : (
+        ) : tab === 'hazard' ? (
           <HazardPanel />
+        ) : (
+          <WeatherPanel />
         )}
       </div>
     </div>

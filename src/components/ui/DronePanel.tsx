@@ -162,6 +162,21 @@ export function DroneCard({ d }: { d: DroneView }) {
         </div>
       </div>
 
+      {d.weather && (
+        <div className="rounded border border-sky-200 bg-sky-50 px-2 py-1 text-[11px] text-slate-700">
+          <div className="font-semibold text-sky-900">
+            🌬 바람 {d.weather.windMs.toFixed(1)}m/s {d.weather.inWake && <span className="text-orange-600">· 빌딩풍 구역 🌀</span>}
+          </div>
+          <div className="grid grid-cols-2 gap-x-2">
+            <span>{d.weather.headwindMs >= 0 ? '맞바람' : '뒷바람'} {Math.abs(d.weather.headwindMs).toFixed(1)} · 옆바람 {d.weather.crosswindMs.toFixed(1)}</span>
+            <span>
+              지면 {msToKmh(d.weather.groundSpeedMs).toFixed(0)} / 대기 {msToKmh(d.weather.airSpeedMs).toFixed(0)} km/h
+            </span>
+            <span className={d.weather.drainMult > 1.3 ? 'font-semibold text-red-600' : ''}>배터리 소모 ×{d.weather.drainMult.toFixed(2)}</span>
+            <span>경로 이탈 {d.weather.crossTrackM.toFixed(1)}m</span>
+          </div>
+        </div>
+      )}
       {d.route ? <RouteBox title="현재 비행 경로 (A*)" route={d.route} conflicts={conflicts} /> : d.phase === 'IDLE' && <PreviewBox />}
 
       {mission && (

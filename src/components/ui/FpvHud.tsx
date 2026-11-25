@@ -165,6 +165,13 @@ export function FpvHud() {
       {/* 하단 가운데: 경고·상태 */}
       <div className="absolute bottom-24 left-1/2 flex w-[30rem] -translate-x-1/2 flex-col items-center gap-1">
         {d.alert && <div className="rounded bg-amber-500/90 px-3 py-1 text-sm font-bold text-black">⚠ {d.alert}</div>}
+        {d.weather && d.weather.windMs > 0.3 && (
+          <div className="rounded bg-sky-900/60 px-2 py-0.5 text-xs">
+            🌬 {d.weather.windMs.toFixed(1)}m/s · {d.weather.headwindMs >= 0 ? '맞바람' : '뒷바람'} {Math.abs(d.weather.headwindMs).toFixed(1)} · 옆바람{' '}
+            {d.weather.crosswindMs.toFixed(1)} · 소모 ×{d.weather.drainMult.toFixed(2)}
+            {d.weather.inWake ? ' · 🌀빌딩풍' : ''}
+          </div>
+        )}
         {warnings.map((w, i) => (
           <div key={i} className={`rounded px-2 py-0.5 text-xs font-semibold ${w.level === 'bad' ? 'animate-pulse bg-red-600/90' : 'bg-black/55'}`}>
             {w.text}

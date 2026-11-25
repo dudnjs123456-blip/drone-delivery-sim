@@ -7,6 +7,7 @@ import { isAirborne } from '../phase';
 const modes: { mode: Exclude<ViewMode, 'FPV'>; label: string }[] = [
   { mode: '3D', label: '3D 시점' },
   { mode: 'TOP', label: '상단 시점' },
+  { mode: 'FLY', label: '🕹 자유 비행' },
 ];
 
 export function ViewControls() {
@@ -17,6 +18,10 @@ export function ViewControls() {
   const showRawPath = useViewStore((s) => s.showRawPath);
   const toggleRawPath = useViewStore((s) => s.toggleRawPath);
   const enterFpv = useViewStore((s) => s.enterFpv);
+  const showWind = useViewStore((s) => s.showWind);
+  const toggleWind = useViewStore((s) => s.toggleWind);
+  const windAlt = useViewStore((s) => s.windAlt);
+  const setWindAlt = useViewStore((s) => s.setWindAlt);
   const exitFpv = useViewStore((s) => s.exitFpv);
   const selectedId = useViewStore((s) => s.selectedDroneId);
   // 선택한 드론, 없으면 비행 중인 첫 드론, 그것도 없으면 첫 드론
@@ -71,6 +76,27 @@ export function ViewControls() {
       >
         A* 격자 {showRawPath ? '켬' : '끔'}
       </button>
+      <button
+        onClick={toggleWind}
+        title="바람 화살표·입자·빌딩풍 구역"
+        className={`rounded-md px-3 py-1.5 font-medium transition ${showWind ? 'bg-sky-100 text-sky-900' : 'text-slate-500 hover:bg-slate-100'}`}
+      >
+        🌬 바람 {showWind ? '켬' : '끔'}
+      </button>
+      {showWind && (
+        <select
+          value={windAlt}
+          onChange={(e) => setWindAlt(Number(e.target.value))}
+          title="바람 화살표를 그릴 고도"
+          className="rounded-md border border-slate-200 bg-white px-1 text-xs text-slate-700"
+        >
+          {[10, 30, 60, 90, 120].map((z) => (
+            <option key={z} value={z}>
+              {z}m
+            </option>
+          ))}
+        </select>
+      )}
     </div>
   );
 }
